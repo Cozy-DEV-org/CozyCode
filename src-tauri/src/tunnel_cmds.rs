@@ -13,6 +13,12 @@ use tauri::Emitter;
 #[derive(Default)]
 pub struct TunnelState(pub Mutex<HashMap<u16, Child>>);
 
+pub fn kill_all(state: &TunnelState) {
+    for (_, mut child) in state.0.lock().unwrap().drain() {
+        let _ = child.kill();
+    }
+}
+
 // where we cache auto-downloaded tunnel binaries (next to the program / appdata)
 fn bin_dir() -> PathBuf {
     let dir = std::env::current_exe()

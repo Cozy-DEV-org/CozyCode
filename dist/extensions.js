@@ -175,7 +175,7 @@ function applyContributions(list) {
 			if (extContainers.some(x => x.id === vc.id)) continue;
 			const views = (c.views || []).filter(v => v.container === vc.id);
 			if (!views.length) continue; // a container with no views = nothing to show
-			extContainers.push({ id: vc.id, title: vc.title || vc.id, views });
+			extContainers.push({ id: vc.id, title: vc.title || vc.id, icon: vc.icon, views });
 		}
 		// views placed into the built-in Explorer show up under the file tree (like VSCode).
 		// views in other built-in containers (debug/test/scm) are skipped — we don't fabricate icons.
@@ -222,7 +222,17 @@ function renderExtActivityButtons() {
 		b.className = 'act-btn';
 		b.dataset.extview = ct.id;
 		b.title = ct.title;
-		b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
+		// use the extension's own icon: $(codicon), an svg/png file, else generic
+		if (typeof ct.icon === 'string' && ct.icon.startsWith('$(')) {
+			b.innerHTML = `<span class="codicon codicon-${esc(ct.icon.slice(2, -1))}"></span>`;
+		} else if (typeof ct.icon === 'string' && ct.icon) {
+			b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
+			invoke('read_file_base64', { path: ct.icon }).then(b64 => {
+				const ext = ct.icon.toLowerCase().split('.').pop();
+				const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'png' ? 'image/png' : 'image/*';
+				b.innerHTML = `<img class="act-ext-icon" src="data:${mime};base64,${b64}">`;
+			}).catch(() => { });
+		} else b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
 		b.onclick = () => showExtContainer(ct.id);
 		bar.insertBefore(b, spacer);
 	}

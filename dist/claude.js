@@ -247,26 +247,38 @@ async function updateMention() {
 	const before = input.value.slice(0, pos);
 	const m = before.match(/@([^\s@]*)$/);
 	const pop = $('#mention-pop');
-	if (!m || !state.root) { pop.classList.add('hidden'); mentionActive = false; return; }
+	if (!m) { pop.classList.add('hidden'); mentionActive = false; return; }
+	if (!state.root) { mentionItems = []; mentionActive = true; renderMention('Open a folder to mention files'); return; }
 	if (!state.fileList) { try { state.fileList = await invoke('list_files', { root: state.root }); } catch { state.fileList = []; } }
 	const q = m[1].toLowerCase();
-	mentionItems = state.fileList.filter(f => f.toLowerCase().includes(q)).slice(0, 8);
-	if (!mentionItems.length) { pop.classList.add('hidden'); mentionActive = false; return; }
+	mentionItems = state.fileList.filter(f => f.toLowerCase().includes(q)).slice(0, 12);
 	mentionActive = true; mentionSel = 0;
-	renderMention();
+	renderMention(mentionItems.length ? null : 'No matching files');
 }
-function renderMention() {
+// fixed-position popup anchored above the input so it can never be clipped
+function renderMention(emptyMsg) {
 	const pop = $('#mention-pop');
+	const input = $('#chat-input');
 	pop.innerHTML = '';
+	if (emptyMsg) {
+		const d = document.createElement('div');
+		d.className = 'mention-item'; d.style.color = 'var(--fg-dim)';
+		d.textContent = emptyMsg;
+		pop.appendChild(d);
+	}
 	mentionItems.forEach((f, i) => {
 		const d = document.createElement('div');
 		d.className = 'mention-item' + (i === mentionSel ? ' selected' : '');
 		d.appendChild(fileIconImg(basename(f)));
-		const s = document.createElement('span'); s.textContent = f; d.appendChild(s);
-		d.onclick = () => pickMention(f);
+		const s = document.createElement('span'); s.className = 'mi-name'; s.textContent = f; d.appendChild(s);
+		d.onmousedown = e => { e.preventDefault(); pickMention(f); };
 		pop.appendChild(d);
 	});
 	pop.classList.remove('hidden');
+	const r = input.getBoundingClientRect();
+	pop.style.left = r.left + 'px';
+	pop.style.width = r.width + 'px';
+	pop.style.bottom = (window.innerHeight - r.top + 4) + 'px';
 }
 function pickMention(f) {
 	const input = $('#chat-input');

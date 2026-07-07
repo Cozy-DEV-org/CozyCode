@@ -70,6 +70,8 @@ body {
 .act-btn.active { color: #fff; border-left-color: #fff; }
 .act-spacer { flex: 1; }
 #btn-claude.active { color: #d98a4b; border-left-color: #d98a4b; }
+.act-ext-icon { width: 22px; height: 22px; object-fit: contain; opacity: .85; }
+.act-btn:hover .act-ext-icon, .act-btn.active .act-ext-icon { opacity: 1; }
 .badge {
 	position: absolute; bottom: 4px; right: 4px; background: var(--status); color: #fff;
 	border-radius: 9px; font-size: 9px; min-width: 15px; height: 15px; line-height: 15px; padding: 0 3px;
@@ -524,8 +526,10 @@ button.primary:hover { filter: brightness(1.15); }
 #chat-ctxinfo { flex: 1; color: var(--fg-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 4px; }
 #chat-send { color: #fff !important; background: var(--accent) !important; }
 #chat-send:hover { filter: brightness(1.15); }
-#mention-pop { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--sidebar); border: 1px solid var(--border); border-radius: 4px; max-height: 200px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,.5); z-index: 10; }
-.mention-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+#mention-pop { position: fixed; background: var(--sidebar); border: 1px solid var(--status); border-radius: 4px; max-height: 240px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,.6); z-index: 3000; }
+.mention-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; cursor: pointer; font-size: 12px; }
+.mention-item .mi-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-item .file-icon { flex-shrink: 0; }
 .mention-item.selected, .mention-item:hover { background: var(--list-sel); color: #fff; }
 #claude-term { flex: 1; padding: 4px; min-height: 0; }
 

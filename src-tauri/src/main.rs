@@ -108,6 +108,21 @@ fn main() {
             pty_cmds::pty_resize,
             pty_cmds::pty_kill,
         ])
+        .on_window_event(|window, event| {
+            // closing the main window must kill every child process — no background
+            // service left behind (pty shells, claude/node trees, ext host, tunnels)
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+                use tauri::Manager;
+                let app = window.app_handle();
+                pty_cmds::kill_all(&app.state());
+                exthost_cmds::kill(&app.state());
+                tunnel_cmds::kill_all(&app.state());
+                if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                    app.exit(0);
+                    std::process::exit(0);
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running CozyCode");
 }

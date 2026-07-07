@@ -683,12 +683,14 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.13.0';
+const APP_VERSION = '0.14.0';
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.
-async function checkForUpdate(el, silent) {
+// silent = no error UI (startup). announce = toast "up to date" when current.
+async function checkForUpdate(el, silent, announce) {
 	const set = t => { if (el) el.textContent = t; };
+	const uptodate = () => { set('You are on the latest version (' + APP_VERSION + ').'); if (announce) toast('CozyCode is up to date (v' + APP_VERSION + ')', 3000); };
 	set('Checking for updates...');
 	const U = window.__TAURI__ && window.__TAURI__.updater;
 	try {
@@ -698,11 +700,10 @@ async function checkForUpdate(el, silent) {
 				if (silent && localStorage.getItem('cozySkipVersion') === update.version) return;
 				promptUpdate(update);
 				set('Update v' + update.version + ' available.');
-			} else set('You are on the latest version (' + APP_VERSION + ').');
+			} else uptodate();
 			return;
 		}
 	} catch (e) { if (!silent) set('Updater unavailable, checking GitHub...'); }
-	// fallback: GitHub API + open release page
 	try {
 		const r = await invoke('check_update');
 		const latest = (r.tag_name || '').replace(/^v/, '');
@@ -710,7 +711,7 @@ async function checkForUpdate(el, silent) {
 			if (silent && localStorage.getItem('cozySkipVersion') === latest) return;
 			promptUpdateManual(latest, r.html_url);
 			set('Update v' + latest + ' available.');
-		} else set('You are on the latest version (' + APP_VERSION + ').');
+		} else uptodate();
 	} catch (e) { if (!silent) set('Update check failed: ' + e); }
 }
 
@@ -857,12 +858,6 @@ Object.assign(Settings, {
 		}
 	} catch (e) { console.error(e); }
 
-	// auto check for updates once per day (silent unless one is found)
-	try {
-		const lastChk = +(localStorage.getItem('cozyUpdChk') || 0);
-		if (Date.now() - lastChk > 86400000) {
-			localStorage.setItem('cozyUpdChk', String(Date.now()));
-			setTimeout(() => checkForUpdate(null, true), 4000);
-		}
-	} catch { }
+	// check for updates on EVERY launch; toast "up to date" when current
+	try { setTimeout(() => checkForUpdate(null, true, true), 3000); } catch { }
 })();

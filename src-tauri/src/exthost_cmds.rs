@@ -15,6 +15,16 @@ pub struct ExtHost {
 #[derive(Default)]
 pub struct ExtHostState(pub Mutex<Option<ExtHost>>);
 
+// kill the node sidecar + any language servers it spawned (process tree)
+pub fn kill(state: &ExtHostState) {
+    if let Some(mut h) = state.0.lock().unwrap().take() {
+        let pid = h.child.id();
+        #[cfg(windows)]
+        { let _ = crate::util::command("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output(); }
+        let _ = h.child.kill();
+    }
+}
+
 #[tauri::command]
 pub async fn exthost_start(app: tauri::AppHandle, state: tauri::State<'_, ExtHostState>, ext_dir: String) -> Result<String, String> {
     let mut guard = state.0.lock().unwrap();

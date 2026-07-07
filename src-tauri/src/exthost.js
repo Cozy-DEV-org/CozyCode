@@ -44,6 +44,106 @@ const treeProviders = new Map(); // viewId -> provider
 const treeItemCache = new Map(); // nodeKey -> element (so clicks can resolve back)
 let _nodeSeq = 1;
 
+/* ---------- real LSP client (IntelliSense) ---------- */
+const cp = require('child_process');
+const languageClients = []; // started LanguageClient instances
+
+function selectorLang(sel) {
+	// documentSelector -> list of language ids
+	const out = [];
+	const add = s => { if (typeof s === 'string') out.push(s); else if (s && s.language) out.push(s.language); };
+	if (Array.isArray(sel)) sel.forEach(add); else add(sel);
+	return out;
+}
+
+class LspClient {
+	constructor(id, name, serverOptions, clientOptions) {
+		this.id = id; this.name = name || id;
+		this.serverOptions = serverOptions;
+		this.langs = selectorLang((clientOptions && clientOptions.documentSelector) || []);
+		this.initOptions = clientOptions && clientOptions.initializationOptions;
+		this.proc = null; this.seq = 1; this.pending = new Map(); this.buf = Buffer.alloc(0);
+		this.opened = new Map(); // uri -> version
+		this.ready = false;
+	}
+	async start() {
+		const so = this.serverOptions;
+		let cmd, args = [];
+		const exe = (so && so.run) || so;
+		if (exe && exe.command) { cmd = exe.command; args = exe.args || []; }
+		else if (exe && exe.module) { cmd = process.execPath; args = [exe.module, ...(exe.args || [])]; }
+		else { throw new Error('unsupported serverOptions'); }
+		this.proc = cp.spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+		this.proc.on('error', e => log('lsp ' + this.name + ' spawn error: ' + e.message));
+		this.proc.stdout.on('data', d => this._onData(d));
+		languageClients.push(this);
+		try {
+			await this._req('initialize', {
+				processId: process.pid, rootUri: null, workspaceFolders: null,
+				initializationOptions: this.initOptions,
+				capabilities: { textDocument: { completion: { completionItem: { snippetSupport: true } }, hover: { contentFormat: ['plaintext', 'markdown'] }, publishDiagnostics: {} }, workspace: {} },
+			}, 8000);
+			this._notify('initialized', {});
+			this.ready = true;
+			log('lsp ' + this.name + ' ready (' + this.langs.join(',') + ')');
+		} catch (e) { log('lsp ' + this.name + ' init failed: ' + e.message); }
+		return { dispose: () => this.stop() };
+	}
+	stop() { try { this.proc && this.proc.kill(); } catch {} }
+	handles(lang) { return this.ready && this.langs.includes(lang); }
+	_frame(obj) { const s = JSON.stringify(obj); return Buffer.concat([Buffer.from('Content-Length: ' + Buffer.byteLength(s) + '\r\n\r\n'), Buffer.from(s)]); }
+	_notify(method, params) { try { this.proc.stdin.write(this._frame({ jsonrpc: '2.0', method, params })); } catch {} }
+	_req(method, params, timeout = 4000) {
+		const id = this.seq++;
+		try { this.proc.stdin.write(this._frame({ jsonrpc: '2.0', id, method, params })); } catch { return Promise.resolve(null); }
+		return new Promise(res => { this.pending.set(id, res); setTimeout(() => { if (this.pending.has(id)) { this.pending.delete(id); res(null); } }, timeout); });
+	}
+	_onData(chunk) {
+		this.buf = Buffer.concat([this.buf, chunk]);
+		while (true) {
+			const sep = this.buf.indexOf('\r\n\r\n');
+			if (sep < 0) break;
+			const m = this.buf.slice(0, sep).toString().match(/Content-Length: (\d+)/i);
+			if (!m) { this.buf = this.buf.slice(sep + 4); continue; }
+			const len = +m[1], start = sep + 4;
+			if (this.buf.length < start + len) break;
+			const body = this.buf.slice(start, start + len).toString();
+			this.buf = this.buf.slice(start + len);
+			let msg; try { msg = JSON.parse(body); } catch { continue; }
+			if (msg.id !== undefined && this.pending.has(msg.id)) { this.pending.get(msg.id)(msg.result); this.pending.delete(msg.id); }
+			else if (msg.method === 'textDocument/publishDiagnostics') this._diag(msg.params);
+			else if (msg.id !== undefined && msg.method) { this._frame && this.proc.stdin.write(this._frame({ jsonrpc: '2.0', id: msg.id, result: null })); } // answer server requests with null
+		}
+	}
+	_diag(p) {
+		const uri = decodeURIComponent((p.uri || '').replace(/^file:\/\/\/?/, '')).replace(/\//g, '\\');
+		const items = (p.diagnostics || []).map(d => ({
+			message: d.message, severity: (d.severity ? d.severity - 1 : 0),
+			startLine: d.range.start.line, startCol: d.range.start.character,
+			endLine: d.range.end.line, endCol: d.range.end.character, source: d.source || this.name,
+		}));
+		send({ event: 'diagnostics', params: { uri, items } });
+	}
+	ensureOpen(uri, lang, text) {
+		const fileUri = 'file:///' + String(uri).replace(/\\/g, '/');
+		if (!this.opened.has(fileUri)) { this.opened.set(fileUri, 1); this._notify('textDocument/didOpen', { textDocument: { uri: fileUri, languageId: lang, version: 1, text } }); }
+		else { const v = this.opened.get(fileUri) + 1; this.opened.set(fileUri, v); this._notify('textDocument/didChange', { textDocument: { uri: fileUri, version: v }, contentChanges: [{ text }] }); }
+		return fileUri;
+	}
+	async completion(uri, lang, text, line, character) {
+		const fileUri = this.ensureOpen(uri, lang, text);
+		const res = await this._req('textDocument/completion', { textDocument: { uri: fileUri }, position: { line, character } }, 3000);
+		const items = res ? (Array.isArray(res) ? res : (res.items || [])) : [];
+		return items.map(it => ({
+			label: typeof it.label === 'object' ? it.label.label : it.label,
+			kind: it.kind ? it.kind - 1 : 0,
+			insertText: (it.textEdit && it.textEdit.newText) || it.insertText || (typeof it.label === 'object' ? it.label.label : it.label),
+			isSnippet: it.insertTextFormat === 2,
+			detail: it.detail, documentation: typeof it.documentation === 'string' ? it.documentation : (it.documentation && it.documentation.value),
+		}));
+	}
+}
+
 function selectorMatches(sel, languageId) {
 	if (!sel) return true;
 	if (Array.isArray(sel)) return sel.some(s => selectorMatches(s, languageId));
@@ -161,9 +261,31 @@ Module._resolveFilename = function (request, ...rest) {
 	return origResolve.call(this, request, ...rest);
 };
 for (const k of Object.keys(STUBS)) require.cache[k] = { id: k, filename: k, loaded: true, exports: STUBS[k] };
-// vscode-languageclient stub: LanguageClient that no-ops (LSP not implemented yet)
-const lcStub = { LanguageClient: class { constructor() {} start() { return { dispose() {} }; } stop() { return Promise.resolve(); } onReady() { return Promise.resolve(); } onNotification() {} sendNotification() {} onRequest() {} sendRequest() { return Promise.resolve(null); } }, TransportKind: { ipc: 0, stdio: 1, pipe: 2, socket: 3 }, RevealOutputChannelOn: { Info: 1, Warn: 2, Error: 3, Never: 4 }, State: { Stopped: 1, Starting: 3, Running: 2 }, SettingMonitor: class { constructor() {} start() { return { dispose() {} }; } } };
-for (const k of NOOP_MODULES) require.cache[k] = { id: k, filename: k, loaded: true, exports: lcStub };
+// vscode-languageclient: real LSP client so extensions get IntelliSense.
+// Extensions call `new LanguageClient(id, name, serverOptions, clientOptions).start()`.
+class LanguageClient {
+	constructor(a, b, c, d) {
+		// signatures: (id, name, serverOptions, clientOptions) or (name, serverOptions, clientOptions)
+		if (typeof c === 'object' && d === undefined && typeof b === 'object') { this._c = new LspClient(a, a, b, c); }
+		else { this._c = new LspClient(a, b, c, d); }
+	}
+	start() { return this._c.start(); }
+	stop() { this._c.stop(); return Promise.resolve(); }
+	onReady() { return Promise.resolve(); }
+	onNotification() {} sendNotification() {} onRequest() {}
+	sendRequest() { return Promise.resolve(null); }
+	registerProposedFeatures() {} registerFeature() {}
+	get initializeResult() { return {}; }
+}
+const lcModule = {
+	LanguageClient,
+	TransportKind: { ipc: 0, stdio: 1, pipe: 2, socket: 3 },
+	RevealOutputChannelOn: { Info: 1, Warn: 2, Error: 3, Never: 4 },
+	State: { Stopped: 1, Starting: 3, Running: 2 },
+	SettingMonitor: class { constructor() {} start() { return { dispose() {} }; } },
+	ErrorAction: { Continue: 1, Shutdown: 2 }, CloseAction: { DoNotRestart: 1, Restart: 2 },
+};
+for (const k of NOOP_MODULES) require.cache[k] = { id: k, filename: k, loaded: true, exports: lcModule };
 
 /* ---------- load extensions (LAZY activation like VSCode) ---------- */
 const loaded = [];
@@ -223,8 +345,11 @@ if (extRoot && fs.existsSync(extRoot)) {
 		for (const l of c.languages || []) if (l.id) events.add('onLanguage:' + l.id);
 		if (!pkg.activationEvents && !events.size) events.add('*'); // very old extensions
 
-		// contributions for the native adapter
-		const vc = (c.viewsContainers && c.viewsContainers.activitybar) || [];
+		// contributions for the native adapter (resolve container icon paths to absolute)
+		const vc = ((c.viewsContainers && c.viewsContainers.activitybar) || []).map(x => ({
+			id: x.id, title: x.title,
+			icon: (typeof x.icon === 'string' && !x.icon.startsWith('$(')) ? path.join(base, x.icon) : x.icon,
+		}));
 		const views = [];
 		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: v.name });
 		if (vc.length || views.length || (c.commands || []).length)
@@ -265,11 +390,17 @@ rl.on('line', async line => {
 	if (msg.method === 'shutdown') process.exit(0);
 	if (msg.method === 'activateEvent') { activateByEvent(msg.params.event); if (msg.id) send({ id: msg.id, result: true }); return; }
 	if (msg.method === 'completions') {
-		const { languageId } = msg.params;
+		const { languageId, uri, text, line, character } = msg.params;
 		activateByEvent('onLanguage:' + languageId);
 		const doc = makeDocument(msg.params);
 		const pos = new Position(msg.params.line, msg.params.character);
 		const items = [];
+		// LSP language servers first (real IntelliSense)
+		for (const client of languageClients) {
+			if (!client.handles(languageId)) continue;
+			try { for (const it of await client.completion(uri, languageId, text, line, character)) { items.push(it); if (items.length > 300) break; } }
+			catch (e) { log('lsp completion error: ' + e.message); }
+		}
 		for (const { selector, provider } of completionProviders) {
 			if (!selectorMatches(selector, languageId)) continue;
 			try {

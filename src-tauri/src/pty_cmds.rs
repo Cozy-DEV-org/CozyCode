@@ -10,6 +10,27 @@ pub struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    pid: Option<u32>,
+}
+
+// Kill the whole process tree for a pid (shell + its children like claude/node).
+// portable-pty's child.kill() only kills the direct process, leaving grandchildren.
+#[cfg(windows)]
+fn kill_tree(pid: u32) {
+    let _ = crate::util::command("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output();
+}
+#[cfg(not(windows))]
+fn kill_tree(pid: u32) {
+    let _ = crate::util::command("pkill").args(["-TERM", "-P", &pid.to_string()]).output();
+    let _ = crate::util::command("kill").args(["-9", &pid.to_string()]).output();
+}
+
+pub fn kill_all(state: &PtyState) {
+    let mut sessions = state.sessions.lock().unwrap();
+    for (_, mut s) in sessions.drain() {
+        if let Some(pid) = s.pid { kill_tree(pid); }
+        let _ = s.child.kill();
+    }
 }
 
 #[derive(Default)]
@@ -62,6 +83,7 @@ pub async fn pty_spawn(
     }
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
+    let pid = child.process_id();
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
@@ -69,7 +91,7 @@ pub async fn pty_spawn(
     let id = state.next_id.fetch_add(1, Ordering::SeqCst) + 1;
     state.sessions.lock().unwrap().insert(
         id,
-        PtySession { master: pair.master, writer, child },
+        PtySession { master: pair.master, writer, child, pid },
     );
 
     let app2 = app.clone();
@@ -109,6 +131,7 @@ pub async fn pty_resize(state: tauri::State<'_, PtyState>, id: u32, cols: u16, r
 #[tauri::command]
 pub async fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
     if let Some(mut s) = state.sessions.lock().unwrap().remove(&id) {
+        if let Some(pid) = s.pid { kill_tree(pid); }
         let _ = s.child.kill();
     }
     Ok(())
