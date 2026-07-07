@@ -295,6 +295,17 @@ button.primary:hover { filter: brightness(1.15); }
 
 /* ---------- extensions (responsive, no horizontal scroll) ---------- */
 #ext-results { overflow-x: hidden; }
+/* viewsWelcome (VSCode: content shown in empty tree views) */
+.views-welcome { padding: 8px 16px; display: flex; flex-direction: column; gap: 8px; }
+.welcome-text { color: var(--fg-dim); font-size: 12px; line-height: 1.5; }
+.welcome-text a { color: var(--status); text-decoration: none; }
+.welcome-text a:hover { text-decoration: underline; }
+.welcome-btn { background: var(--accent); border: none; color: #fff; font-size: 12px; padding: 5px 10px; border-radius: 2px; cursor: pointer; max-width: 260px; }
+.welcome-btn:hover { filter: brightness(1.15); }
+
+/* while dragging any resizer, iframes must not swallow mouse events */
+body.dragging-resize iframe { pointer-events: none !important; }
+
 /* compact rows: icon | text (ellipsised, never wraps) | pinned actions column */
 .ext-card { display: flex; gap: 8px; padding: 5px 10px; cursor: default; border-bottom: 1px solid rgba(60,60,60,.4); max-width: 100%; box-sizing: border-box; align-items: center; }
 .ext-card:hover { background: var(--hover); }

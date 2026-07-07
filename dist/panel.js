@@ -333,6 +333,7 @@ function makeVResizer(el) {
 				engaged = true;
 				showPanel();
 				el.classList.add('dragging');
+				document.body.classList.add('dragging-resize'); // iframes must not swallow mousemove
 				document.body.style.cursor = 'ns-resize';
 			}
 			// xterm fit() per mousemove is expensive — resize via rAF, fit on release
@@ -348,6 +349,7 @@ function makeVResizer(el) {
 		};
 		const up = () => {
 			el.classList.remove('dragging'); document.body.style.cursor = '';
+			document.body.classList.remove('dragging-resize');
 			if (raf) { cancelAnimationFrame(raf); raf = 0; }
 			if (engaged) activeTerm && activeTerm.fit.fit();
 			document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
@@ -361,6 +363,7 @@ function makeVResizer(el) {
 function makeHResizer(el, target) {
 	el.addEventListener('mousedown', e => {
 		e.preventDefault();
+		document.body.classList.add('dragging-resize'); // iframes must not swallow mousemove
 		const left = target.getBoundingClientRect().left;
 		const move = ev => {
 			const z = zoom();
@@ -370,7 +373,7 @@ function makeHResizer(el, target) {
 			target.style.display = 'flex';
 			target.style.width = w + 'px';
 		};
-		const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+		const up = () => { document.body.classList.remove('dragging-resize'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
 		document.addEventListener('mousemove', move);
 		document.addEventListener('mouseup', up);
 	});

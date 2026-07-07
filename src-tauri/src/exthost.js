@@ -36,7 +36,10 @@ class CompletionItem {
 class Diagnostic {
 	constructor(range, message, severity = 0) { this.range = range; this.message = message; this.severity = severity; }
 }
-class Disposable { constructor(fn) { this.dispose = fn || (() => {}); } }
+class Disposable {
+	constructor(fn) { this.dispose = fn || (() => {}); }
+	static from(...items) { return new Disposable(() => { for (const d of items) { try { d && d.dispose && d.dispose(); } catch {} } }); }
+}
 class EventEmitter {
 	constructor() { this._h = []; this.event = h => { this._h.push(h); return new Disposable(); }; }
 	fire(e) { this._h.forEach(h => { try { h(e); } catch {} }); }
@@ -45,20 +48,49 @@ class EventEmitter {
 // permissive stubs: unknown APIs resolve to a callable/constructable no-op so
 // extensions don't crash. `permObj` gives a returned object a permissive prototype.
 const UNIVERSAL = new Proxy(function () {}, {
-	get: (_t, p) => (p === 'then' || typeof p === 'symbol') ? undefined : UNIVERSAL,
+	get: (_t, p) => {
+		if (p === 'then' || p === '__esModule') return undefined;
+		// coercion + iteration must not throw: `${stub}` needs Symbol.toPrimitive,
+		// `[...stub]` / `for..of stub` need Symbol.iterator (empty)
+		if (p === Symbol.toPrimitive) return () => '';
+		if (p === Symbol.iterator) return function* () {};
+		if (p === Symbol.asyncIterator) return async function* () {};
+		if (typeof p === 'symbol') return undefined;
+		if (p === 'toString' || p === 'toLocaleString') return () => '';
+		if (p === 'valueOf') return () => 0;
+		return UNIVERSAL;
+	},
+	has: () => true,
 	apply: () => UNIVERSAL,
 	construct: () => UNIVERSAL,
 	// swallow writes so `stub.name = x` (name is read-only on functions) doesn't throw
 	set: () => true, defineProperty: () => true, deleteProperty: () => true,
 });
 const PERMISSIVE = new Proxy({}, {
-	get: (_t, p) => (p === 'then' || typeof p === 'symbol' || p === '__esModule') ? undefined : UNIVERSAL,
+	get: (_t, p) => {
+		if (p === Symbol.toPrimitive) return () => '';
+		if (p === 'then' || typeof p === 'symbol' || p === '__esModule') return undefined;
+		return UNIVERSAL;
+	},
 });
 const permObj = o => Object.assign(Object.create(PERMISSIVE), o);
 
 const completionProviders = []; // { selector, provider }
 const commands = new Map();
 const contextKeys = {}; // set via executeCommand('setContext', k, v); drives when-clauses
+const configStore = {}; // setting key -> default value, from every ext's contributes.configuration
+
+// a real appRoot with product.json — extensions read `${env.appRoot}/product.json`
+// (remote-containers does at activate); an empty appRoot resolved to cwd and crashed
+const APP_ROOT = path.join(path.dirname(extRoot), 'appRoot');
+try {
+	fs.mkdirSync(APP_ROOT, { recursive: true });
+	fs.writeFileSync(path.join(APP_ROOT, 'product.json'), JSON.stringify({
+		nameShort: 'CozyCode', nameLong: 'CozyCode', applicationName: 'cozycode',
+		version: '1.106.0', quality: 'stable', commit: 'cozycode',
+		extensionsGallery: { serviceUrl: 'https://open-vsx.org/vscode/gallery', itemUrl: 'https://open-vsx.org/vscode/item' },
+	}, null, 2));
+} catch {}
 const diagCollections = [];
 const treeProviders = new Map(); // viewId -> provider
 const treeItemCache = new Map(); // nodeKey -> element (so clicks can resolve back)
@@ -251,27 +283,49 @@ function selectorMatches(sel, languageId) {
 	return true;
 }
 
-// vscode.Uri shim with the real methods extensions rely on (.with/.toString/.toJSON).
-// Missing .with() crashed extensions (e.g. Dart DevTools EnvUtils.exposeUrl).
-const UriProto = {
+// vscode.Uri as a REAL class — extensions subclass it (`class GitUri extends
+// vscode.Uri` in GitLens) and call `super({scheme})`, so a plain object breaks
+// whole extension families at load time.
+class Uri {
+	constructor(c) {
+		c = c || {};
+		this.scheme = c.scheme || 'file'; this.authority = c.authority || '';
+		this.path = c.path || ''; this.query = c.query || ''; this.fragment = c.fragment || '';
+		if (c.fsPath != null) this._fsPath = c.fsPath;
+	}
+	get fsPath() {
+		if (this._fsPath != null) return this._fsPath;
+		let p = this.path;
+		if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1); // /C:/x -> C:/x
+		return p.replace(/\//g, path.sep);
+	}
 	with(c) {
 		c = c || {};
-		const scheme = c.scheme != null ? c.scheme : this.scheme, p = c.path != null ? c.path : this.path;
-		return mkUri({ scheme, authority: c.authority != null ? c.authority : this.authority, path: p, query: c.query != null ? c.query : this.query, fragment: c.fragment != null ? c.fragment : this.fragment, fsPath: scheme === 'file' ? String(p).replace(/\//g, path.sep) : this.fsPath });
-	},
-	toString() { return (this.scheme || 'file') + '://' + (this.authority || '') + (this.path && !this.path.startsWith('/') && (this.scheme === 'file') ? '/' : '') + this.path + (this.query ? '?' + this.query : '') + (this.fragment ? '#' + this.fragment : ''); },
-	toJSON() { return { $mid: 1, scheme: this.scheme, authority: this.authority, path: this.path, query: this.query, fragment: this.fragment, fsPath: this.fsPath }; },
-};
-function mkUri(f) { return Object.assign(Object.create(UriProto), { scheme: 'file', authority: '', path: '', query: '', fragment: '', fsPath: f && f.fsPath != null ? f.fsPath : (f && f.path) || '' }, f); }
+		return new Uri({
+			scheme: c.scheme != null ? c.scheme : this.scheme,
+			authority: c.authority != null ? c.authority : this.authority,
+			path: c.path != null ? c.path : this.path,
+			query: c.query != null ? c.query : this.query,
+			fragment: c.fragment != null ? c.fragment : this.fragment,
+		});
+	}
+	toString() { return (this.scheme || 'file') + '://' + (this.authority || '') + (this.path && !this.path.startsWith('/') && this.scheme === 'file' ? '/' : '') + this.path + (this.query ? '?' + this.query : '') + (this.fragment ? '#' + this.fragment : ''); }
+	toJSON() { return { $mid: 1, scheme: this.scheme, authority: this.authority, path: this.path, query: this.query, fragment: this.fragment, fsPath: this.fsPath }; }
+	static file(p) { return new Uri({ scheme: 'file', path: String(p).replace(/\\/g, '/'), fsPath: p }); }
+	static parse(s) {
+		const m = /^([a-zA-Z][\w+.-]*):\/\/([^/?#]*)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(String(s));
+		return m ? new Uri({ scheme: m[1], authority: m[2] || '', path: m[3] || '', query: m[4] || '', fragment: m[5] || '' })
+			: new Uri({ scheme: 'file', path: String(s), fsPath: String(s) });
+	}
+	static from(c) { return new Uri(c); }
+	static joinPath(base, ...parts) { return Uri.file(path.join((base && base.fsPath) || String(base), ...parts)); }
+	static isUri(u) { return u instanceof Uri; }
+}
 
 const vscode = {
 	version: '1.106.0', // >=1.106: extensions detect secondary-sidebar support from this (Claude Code does)
 	Position, Range, SnippetString, CompletionItem, Diagnostic, Disposable, EventEmitter,
-	Uri: {
-		file: p => mkUri({ scheme: 'file', path: String(p).replace(/\\/g, '/'), fsPath: p }),
-		parse: s => { const m = /^([a-zA-Z][\w+.-]*):\/\/([^/?#]*)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(String(s)); return m ? mkUri({ scheme: m[1], authority: m[2] || '', path: m[3] || '', query: m[4] || '', fragment: m[5] || '', fsPath: m[3] || '' }) : mkUri({ scheme: 'file', path: String(s), fsPath: String(s) }); },
-		from: c => mkUri(c || {}),
-	},
+	Uri,
 	CompletionItemKind: new Proxy({}, { get: (_, k) => ({ Text: 0, Method: 1, Function: 2, Constructor: 3, Field: 4, Variable: 5, Class: 6, Interface: 7, Module: 8, Property: 9, Unit: 10, Value: 11, Enum: 12, Keyword: 13, Snippet: 14, Color: 15, File: 16, Reference: 17 })[k] ?? 0 }),
 	DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
 	commands: {
@@ -328,7 +382,31 @@ const vscode = {
 		activeTerminal: undefined, showWorkspaceFolderPick: async () => undefined,
 	},
 	workspace: {
-		getConfiguration: () => ({ get: (k, d) => d, has: () => false, update: async () => {}, inspect: () => undefined }),
+		// real VSCode semantics: configuration values come from each extension's own
+		// contributes.configuration DEFAULTS (collected into configStore at scan time),
+		// so `config.get('x')` / `config.x.y` return what the extension declared
+		// instead of undefined (which crashed e.g. vscode-icons, discord presence).
+		getConfiguration: (section) => {
+			const prefix = section ? section + '.' : '';
+			const obj = {};
+			for (const k in configStore) {
+				if (!k.startsWith(prefix)) continue;
+				const parts = k.slice(prefix.length).split('.');
+				let o = obj;
+				for (let i = 0; i < parts.length - 1; i++) o = o[parts[i]] = (typeof o[parts[i]] === 'object' && o[parts[i]]) || {};
+				if (o[parts[parts.length - 1]] === undefined) o[parts[parts.length - 1]] = configStore[k];
+			}
+			const lookup = k => {
+				if ((prefix + k) in configStore) return configStore[prefix + k];
+				return String(k).split('.').reduce((a, b) => (a == null ? a : a[b]), obj);
+			};
+			return Object.assign(Object.create(PERMISSIVE), obj, {
+				get: (k, d) => { const v = lookup(k); return v === undefined ? d : v; },
+				has: k => lookup(k) !== undefined,
+				update: async () => {},
+				inspect: k => ({ key: prefix + k, defaultValue: configStore[prefix + k] }),
+			});
+		},
 		onDidChangeConfiguration: () => new Disposable(),
 		onDidOpenTextDocument: () => new Disposable(),
 		onDidChangeTextDocument: () => new Disposable(),
@@ -423,7 +501,7 @@ const vscode = {
 		all: [], onDidChange: () => new Disposable(),
 	},
 	env: {
-		appName: 'CozyCode', appRoot: '', appHost: 'desktop', uriScheme: 'cozycode', machineId: 'cozy', sessionId: 'cozy', language: 'en',
+		appName: 'CozyCode', appRoot: APP_ROOT, appHost: 'desktop', uriScheme: 'cozycode', machineId: 'cozy', sessionId: 'cozy', language: 'en',
 		clipboard: { writeText: async () => {}, readText: async () => '' },
 		openExternal: async () => true, asExternalUri: async u => u, remoteName: undefined, shell: process.env.ComSpec || 'cmd.exe',
 		isTelemetryEnabled: false, onDidChangeTelemetryEnabled: () => new Disposable(),
@@ -460,7 +538,6 @@ const vscode = {
 	FoldingRange: class {}, FoldingRangeKind: { Comment: 1, Imports: 2, Region: 3 },
 	InlayHint: class {}, SemanticTokensBuilder: class { push() {} build() { return {}; } }, SemanticTokensLegend: class {},
 };
-vscode.Uri.joinPath = (base, ...parts) => vscode.Uri.file(path.join(base.fsPath || String(base), ...parts));
 
 // Wrap the vscode API in a Proxy: any API we haven't implemented returns a
 // permissive universal stub (callable/constructable, any property returns itself)
@@ -572,8 +649,10 @@ const contributions = [];   // { id, viewsContainers, views, commands }
 const extIndex = new Map(); // dir -> { base, pkg, events:Set, activated:bool, exports }
 const extById = new Map();  // "publisher.name" (lc) -> { base, pkg, dir } (for getExtension)
 
-function makeContext(base) {
+function makeContext(base, pkg) {
+	pkg = pkg || {};
 	const uri = vscode.Uri.file(base);
+	const extId = (pkg.publisher && pkg.name) ? pkg.publisher + '.' + pkg.name : base;
 	// permObj on the context and its sub-objects: missing methods (e.g.
 	// environmentVariableCollection.get, context.languageModelAccessInformation)
 	// resolve to no-op stubs instead of throwing during activate.
@@ -584,7 +663,7 @@ function makeContext(base) {
 		workspaceState: permObj({ get: (k, d) => d, update: async () => {}, keys: () => [] }),
 		secrets: permObj({ get: async () => undefined, store: async () => {}, delete: async () => {}, onDidChange: () => new Disposable() }),
 		asAbsolutePath: r => path.join(base, r),
-		extension: permObj({ id: base, extensionPath: base, extensionUri: uri, isActive: true, packageJSON: permObj({}), exports: PERMISSIVE }),
+		extension: permObj({ id: extId, extensionPath: base, extensionUri: uri, isActive: true, packageJSON: pkg, exports: PERMISSIVE }),
 		environmentVariableCollection: Object.assign(envColl(), { getScoped: () => envColl() }),
 		storageUri: uri, globalStorageUri: uri, logUri: uri,
 		storagePath: base, globalStoragePath: base, logPath: base,
@@ -599,9 +678,9 @@ function activateExt(dir) {
 	try {
 		const mod = require(path.join(rec.base, rec.pkg.main));
 		if (typeof mod.activate === 'function') {
-			Promise.resolve(mod.activate(makeContext(rec.base))).then(
+			Promise.resolve(mod.activate(makeContext(rec.base, rec.pkg))).then(
 				(api) => { rec.exports = api === undefined ? {} : api; setStatus(dir, 'activated'); }, // exports for dependent extensions (getExtension().exports)
-				e => setStatus(dir, 'activate failed: ' + String(e && e.message).slice(0, 100)),
+				e => setStatus(dir, 'activate failed: ' + String(e && e.message).slice(0, 260)),
 			);
 		} else { rec.exports = mod && mod.exports !== undefined ? mod.exports : {}; setStatus(dir, 'loaded'); }
 	} catch (e) { if (process.env.COZY_STACK) process.stderr.write('LOADFAIL ' + dir + '\n' + (e && e.stack) + '\n'); setStatus(dir, 'load failed: ' + String(e && e.message).slice(0, 100)); }
@@ -636,6 +715,14 @@ if (extRoot && fs.existsSync(extRoot)) {
 			: s;
 		const c = pkg.contributes || {};
 
+		// collect configuration DEFAULTS (contributes.configuration is an object or array)
+		for (const cfg of Array.isArray(c.configuration) ? c.configuration : (c.configuration ? [c.configuration] : [])) {
+			for (const key in cfg.properties || {}) {
+				const d = cfg.properties[key].default;
+				if (d !== undefined) configStore[key] = d;
+			}
+		}
+
 		// explicit + implicit activation events (VSCode auto-generates from contributes)
 		const events = new Set(pkg.activationEvents || []);
 		for (const cm of c.commands || []) events.add('onCommand:' + cm.command);
@@ -657,8 +744,11 @@ if (extRoot && fs.existsSync(extRoot)) {
 		}
 		const views = [];
 		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: loc(v.name), type: v.type || 'tree', when: v.when || '' });
-		if (vc.length || views.length || (c.commands || []).length)
-			contributions.push({ id: dir, viewsContainers: vc, views, commands: (c.commands || []).map(cm => ({ command: cm.command, title: loc(cm.title), category: loc(cm.category) })) });
+		// viewsWelcome: what VSCode renders in an empty tree view (Sign in / Connect /
+		// Open Folder buttons) — markdown subset, command: links become buttons
+		const welcome = (c.viewsWelcome || []).map(w => ({ view: w.view, contents: loc(w.contents), when: w.when || '' }));
+		if (vc.length || views.length || welcome.length || (c.commands || []).length)
+			contributions.push({ id: dir, viewsContainers: vc, views, welcome, commands: (c.commands || []).map(cm => ({ command: cm.command, title: loc(cm.title), category: loc(cm.category) })) });
 
 		if (pkg.main) { extIndex.set(dir, { base, pkg, events, activated: false }); loaded.push({ id: dir, status: 'registered' }); }
 		else loaded.push({ id: dir, status: 'no-code (themes/snippets)' });
@@ -667,6 +757,7 @@ if (extRoot && fs.existsSync(extRoot)) {
 function sendLoaded() { send({ event: 'loaded', params: loaded }); }
 sendLoaded();
 send({ event: 'contributes', params: contributions });
+send({ event: 'configStore', params: configStore }); // config defaults drive config.* when-clauses
 // activate startup extensions only (lazy for the rest)
 setTimeout(() => activateByEvent('onStartupFinished'), 50);
 

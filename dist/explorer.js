@@ -55,9 +55,9 @@ async function loadWorkspaceConfig(dir) {
 }
 
 function setWindowTitle(name) {
-	const t = (state.remote ? '[SSH] ' : '') + name + ' - CozyCode';
-	document.title = t;
-	$('#tb-title').textContent = t;
+	// the command-center search pill shows the folder now; #tb-title stays an
+	// empty drag region (text there looked like a stray label next to the menu)
+	document.title = (state.remote ? '[SSH] ' : '') + name + ' - CozyCode';
 }
 
 async function renderTree() {

@@ -442,12 +442,13 @@ chatInput.addEventListener('focus', updateContext);
 // edge tracks the cursor exactly; xterm fit() only on release (expensive per-move)
 $('#aux-resizer').addEventListener('mousedown', e => {
 	e.preventDefault();
+	document.body.classList.add('dragging-resize'); // iframes must not swallow mousemove
 	const right = $('#aux').getBoundingClientRect().right;
 	const move = ev => {
 		const z = zoom();
 		$('#aux').style.width = Math.max(240, Math.min((window.innerWidth / z) - 400, (right - ev.clientX) / z)) + 'px';
 	};
-	const up = () => { cliActive && cliActive.fit.fit(); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+	const up = () => { document.body.classList.remove('dragging-resize'); cliActive && cliActive.fit.fit(); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
 	document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
 });
 

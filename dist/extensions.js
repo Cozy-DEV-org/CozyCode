@@ -176,23 +176,114 @@ const BUILTIN_CONTAINERS = new Set(['explorer', 'scm', 'debug', 'test', 'remote'
 // Claude Code's left container has when:"claude-code:doesNotSupportSecondarySidebar"
 // so with a secondary sidebar present it must NOT appear on the left.
 let contextKeys = {};
-// ponytail: minimal when-evaluator — !, &&, ||, ==/!= on context keys; no parens
-// (none of the installed extensions' container whens use them). Unknown key = falsy.
+let extConfig = {};   // configuration defaults from every extension (exthost configStore)
+// context key resolution, VSCode semantics: extension setContext keys first, then
+// workbench built-ins, then config.* lookups. Unknown = undefined (falsy).
+function ctxValue(k) {
+	if (k in contextKeys) return contextKeys[k];
+	if (k === 'workspaceFolderCount') return state.root ? 1 : 0;
+	if (k === 'isWeb') return false;
+	if (k === 'isWindows') return true;
+	if (k === 'remoteName') return state.remote ? 'ssh-remote' : undefined;
+	if (k === 'true') return true;
+	if (k === 'false') return false;
+	// git context keys normally come from VSCode's built-in git extension — CozyCode
+	// has a native git backend (SCM view), so surface its state under the same keys
+	if (k === 'git.state') return 'initialized';
+	if (k === 'gitOpenRepositoryCount') return (state.repos || []).length;
+	if (k === 'git.parentRepositoryCount' || k === 'git.unsafeRepositoryCount' || k === 'git.closedRepositoryCount') return 0;
+	if (k === 'gitNotInstalled') return false;
+	if (k.startsWith('config.')) return extConfig[k.slice(7)];
+	return undefined;
+}
+// real when-clause parser: !, &&, ||, parentheses, ==/!=/</>/<=/>= with quoted or
+// bare literals and numbers (GitHub PR uses `workspaceFolderCount > 0`, GitLens
+// uses nested parens). `=~` regex matches are treated as false.
 function evalWhen(w) {
 	if (!w) return true;
-	return String(w).split('||').some(part => part.split('&&').every(t => {
-		t = t.trim(); if (!t) return true;
-		let neg = false;
-		while (t.startsWith('!') && !t.includes('=')) { neg = !neg; t = t.slice(1).trim(); }
-		let v;
-		const m = t.match(/^(!?)([\w.:\-\/]+)\s*(==|!=)\s*'?([^']*?)'?$/);
-		if (m) { const eq = String(contextKeys[m[2]] ?? '') === m[4]; v = m[3] === '==' ? eq : !eq; if (m[1]) v = !v; }
-		else v = !!contextKeys[t];
-		return neg ? !v : v;
-	}));
+	try {
+		const toks = String(w).match(/&&|\|\||==|!=|<=|>=|=~|[!()<>]|'[^']*'|[^\s!()&|<>=]+/g) || [];
+		let i = 0;
+		const peek = () => toks[i], next = () => toks[i++];
+		const literal = t => { if (/^'.*'$/.test(t)) return t.slice(1, -1); if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t); if (t === 'true') return true; if (t === 'false') return false; return t; };
+		function unary() {
+			const t = next();
+			if (t === '!') return !unary();
+			if (t === '(') { const v = or(); next(); return v; }
+			// key [op literal]
+			const op = peek();
+			if (['==', '!=', '<', '>', '<=', '>=', '=~'].includes(op)) {
+				next();
+				const rhs = literal(next());
+				const lhs = ctxValue(t);
+				if (op === '=~') return false;
+				if (typeof rhs === 'number') {
+					const ln = Number(lhs);
+					return op === '==' ? ln === rhs : op === '!=' ? ln !== rhs : op === '<' ? ln < rhs : op === '>' ? ln > rhs : op === '<=' ? ln <= rhs : ln >= rhs;
+				}
+				const eq = String(lhs ?? 'undefined') === String(rhs);
+				return op === '==' ? eq : op === '!=' ? !eq : false;
+			}
+			return !!ctxValue(t);
+		}
+		function and() { let v = unary(); while (peek() === '&&') { next(); const r = unary(); v = v && r; } return v; }
+		function or() { let v = and(); while (peek() === '||') { next(); const r = and(); v = v || r; } return v; }
+		return or();
+	} catch { return true; }
 }
 
 let allContribs = [];
+// viewsWelcome: view id -> [{contents, when}] — rendered when a tree view has
+// nothing to show (VSCode behavior: Sign in / Connect / Open Folder buttons)
+function welcomeFor(viewId) {
+	const out = [];
+	for (const c of allContribs) for (const w of c.welcome || []) if (w.view === viewId && evalWhen(w.when)) out.push(w);
+	return out;
+}
+function renderViewsWelcome(viewId, container) {
+	const entries = welcomeFor(viewId);
+	if (!entries.length) return false;
+	container.innerHTML = '';
+	const box = document.createElement('div');
+	box.className = 'views-welcome';
+	for (const w of entries) {
+		for (const line of String(w.contents).split('\n')) {
+			const t = line.trim();
+			if (!t) continue;
+			const cmd = t.match(/^\[([^\]]+)\]\(command:([^)]+)\)$/);
+			if (cmd) { // a line that is ONLY a command link renders as a button (VSCode)
+				const b = document.createElement('button');
+				b.className = 'welcome-btn';
+				b.textContent = cmd[1];
+				b.onclick = () => rpc('executeCommand', { command: cmd[2].split('?')[0], args: [] }, 8000).catch(() => { });
+				box.appendChild(b);
+				continue;
+			}
+			const p = document.createElement('div');
+			p.className = 'welcome-text';
+			// inline links: [text](command:x) -> clickable; [text](https://x) -> external
+			p.innerHTML = esc(t)
+				.replace(/\[([^\]]+)\]\(command:([^)]+)\)/g, (_, txt, c2) => `<a href="#" data-cmd="${esc(c2.split('?')[0])}">${txt}</a>`)
+				.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, (_, txt, url) => `<a href="#" data-url="${esc(url)}">${txt}</a>`);
+			p.querySelectorAll('a[data-cmd]').forEach(a => a.onclick = ev => { ev.preventDefault(); rpc('executeCommand', { command: a.dataset.cmd, args: [] }, 8000).catch(() => { }); });
+			p.querySelectorAll('a[data-url]').forEach(a => a.onclick = ev => { ev.preventDefault(); invoke('open_url', { url: a.dataset.url }).catch(() => { }); });
+			box.appendChild(p);
+		}
+	}
+	container.appendChild(box);
+	return true;
+}
+
+// context keys arrive in bursts while extensions activate — refresh any view
+// currently showing welcome/(empty) content once things settle
+let _welcomeT = 0;
+function scheduleWelcomeRefresh() {
+	clearTimeout(_welcomeT);
+	_welcomeT = setTimeout(() => {
+		$$('[data-welcome-view]').forEach(el => { if (el.isConnected) loadTreeChildren(el.dataset.welcomeView, null, el, 0); });
+	}, 700);
+}
+
 function applyContributions(list) {
 	for (const c of list || []) {
 		if (!allContribs.some(x => x.id === c.id)) allContribs.push(c);
@@ -423,12 +514,15 @@ function renderPanelContainers() {
 // (a start+delta approach drifts when CSS zoom != 1)
 $('#secondary-resizer').addEventListener('mousedown', e => {
 	e.preventDefault();
+	// iframes swallow mousemove when the cursor crosses them mid-drag, which made
+	// the panel "run away" from the mouse — disable their hit-testing while dragging
+	document.body.classList.add('dragging-resize');
 	const right = $('#secondary-sidebar').getBoundingClientRect().right;
 	const move = ev => {
 		const z = zoom();
 		$('#secondary-sidebar').style.width = Math.max(200, Math.min((window.innerWidth / z) - 400, (right - ev.clientX) / z)) + 'px';
 	};
-	const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+	const up = () => { document.body.classList.remove('dragging-resize'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
 	document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
 });
 /* ---------- titlebar layout toggles (VSCode-style Left / Panel / Right) ---------- */
@@ -515,7 +609,12 @@ async function renderWebviewView(viewId, container) {
 		restartExtHost();
 		return;
 	}
-	if (!res.file) { msg('Webview did not load.'); if (res.error) cozyLog('exthost', 'webview ' + viewId + ': ' + res.error); return; }
+	if (!res.file) {
+		if (res.error) cozyLog('exthost', 'webview ' + viewId + ': ' + res.error);
+		// no webview provider -> the extension's viewsWelcome is the right fallback
+		if (!renderViewsWelcome(viewId, container)) msg('This view is not available yet.');
+		return;
+	}
 	container.innerHTML = '';
 	const frame = document.createElement('iframe');
 	frame.className = 'ext-webview';
@@ -535,7 +634,14 @@ async function loadTreeChildren(viewId, nodeKey, container, depth) {
 	container.innerHTML = depth === 0 ? '<div class="ext-tree-item" style="color:var(--fg-dim)">Loading...</div>' : '';
 	const nodes = await rpc('treeChildren', { viewId, nodeKey }, 6000) || [];
 	container.innerHTML = '';
-	if (!nodes.length && depth === 0) { container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim)">(empty)</div>'; return; }
+	if (!nodes.length && depth === 0) {
+		// empty tree -> render the extension's viewsWelcome content (like VSCode);
+		// mark the host so late setContext/config updates can re-evaluate it
+		container.dataset.welcomeView = viewId;
+		if (!renderViewsWelcome(viewId, container)) container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim)">(empty)</div>';
+		return;
+	}
+	if (depth === 0) delete container.dataset.welcomeView;
 	for (const n of nodes) {
 		const row = document.createElement('div');
 		row.className = 'ext-tree-item';
@@ -604,7 +710,8 @@ function onExtLine(line) {
 	}
 	else if (msg.event === 'log') cozyLog('exthost', msg.params);
 	// extension setContext -> re-evaluate when-clauses -> re-place containers
-	else if (msg.event === 'contextKeys') { contextKeys = msg.params || {}; placeContainers(); }
+	else if (msg.event === 'contextKeys') { contextKeys = msg.params || {}; placeContainers(); scheduleWelcomeRefresh(); }
+	else if (msg.event === 'configStore') { extConfig = msg.params || {}; placeContainers(); scheduleWelcomeRefresh(); }
 	// extension -> webview message: buffered until the iframe is ready (VSCode
 	// pendingMessages pattern) — see deliverToWebview/flushWebviewQueue
 	else if (msg.event === 'webviewToView') { bindWebview(); deliverToWebview(msg.params.viewId, msg.params.msg); }
