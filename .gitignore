@@ -1,0 +1,14 @@
+# Rust / Tauri build artifacts
+/src-tauri/target/
+/src-tauri/gen/
+**/*.rs.bk
+
+# Node
+node_modules/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Local caches
+*.log

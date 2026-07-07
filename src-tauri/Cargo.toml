@@ -1,0 +1,24 @@
+[package]
+name = "cozycode"
+version = "0.6.1"
+description = "CozyCode — a cozy code editor. Rust + Tauri rework of Code - OSS."
+license = "MIT"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+git2 = { version = "0.19", default-features = false }
+portable-pty = "0.8"
+# libssh2 uses WinCNG on Windows — no OpenSSL build needed
+ssh2 = "0.9"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

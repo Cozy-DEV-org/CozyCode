@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>CozyCode</title>
+	<link rel="stylesheet" href="style.css">
+	<!-- ponytail: CDN for monaco/xterm/codicons keeps repo tiny; vendor locally in Phase 5 for offline -->
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@vscode/codicons@0.0.36/dist/codicon.css">
+	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+	<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+	<div id="titlebar" data-tauri-drag-region>
+		<img id="tb-logo" src="logo.svg" alt="">
+		<div id="menubar"></div>
+		<div id="tb-title" data-tauri-drag-region>CozyCode</div>
+		<div id="window-controls">
+			<button id="win-min" title="Minimize"><span class="codicon codicon-chrome-minimize"></span></button>
+			<button id="win-max" title="Maximize"><span class="codicon codicon-chrome-maximize"></span></button>
+			<button id="win-close" title="Close"><span class="codicon codicon-chrome-close"></span></button>
+		</div>
+	</div>
+
+	<div id="root">
+		<div id="activitybar">
+			<button class="act-btn active" data-view="explorer" title="Explorer (Ctrl+Shift+E)"><span class="codicon codicon-files"></span></button>
+			<button class="act-btn" data-view="search" title="Search (Ctrl+Shift+F)"><span class="codicon codicon-search"></span></button>
+			<button class="act-btn" data-view="scm" title="Source Control (Ctrl+Shift+G)"><span class="codicon codicon-source-control"></span><span id="scm-badge" class="badge hidden"></span></button>
+			<button class="act-btn" data-view="extensions" title="Extensions (Ctrl+Shift+X)"><span class="codicon codicon-extensions"></span></button>
+			<button class="act-btn" data-view="remote" title="Remote SSH"><span class="codicon codicon-remote"></span></button>
+			<button class="act-btn" id="btn-claude" title="Claude AI (Ctrl+Shift+A)"><span class="codicon codicon-sparkle"></span></button>
+			<div class="act-spacer"></div>
+			<button class="act-btn" id="btn-account" title="Accounts"><span class="codicon codicon-account"></span></button>
+			<button class="act-btn" id="btn-settings-gear" title="Manage"><span class="codicon codicon-settings-gear"></span></button>
+		</div>
+
+		<div id="sidebar">
+			<div class="view" id="view-explorer">
+				<div class="view-title">
+					<span id="explorer-title">EXPLORER</span>
+					<span class="view-actions">
+						<button id="btn-new-file" title="New File"><span class="codicon codicon-new-file"></span></button>
+						<button id="btn-new-folder" title="New Folder"><span class="codicon codicon-new-folder"></span></button>
+						<button id="btn-refresh" title="Refresh"><span class="codicon codicon-refresh"></span></button>
+					</span>
+				</div>
+				<div id="no-folder">
+					<p>You have not yet opened a folder.</p>
+					<button id="btn-open-folder" class="primary">Open Folder</button>
+				</div>
+				<div id="tree"></div>
+				<div id="timeline-section" class="hidden">
+					<div class="section-header" id="timeline-header"><span class="codicon codicon-chevron-right"></span> TIMELINE</div>
+					<div id="timeline-list" class="hidden"></div>
+				</div>
+			</div>
+
+			<div class="view hidden" id="view-search">
+				<div class="view-title"><span>SEARCH</span></div>
+				<input id="search-input" placeholder="Search (Enter)" spellcheck="false">
+				<div id="search-results"></div>
+			</div>
+
+			<div class="view hidden" id="view-scm">
+				<div class="view-title">
+					<span>SOURCE CONTROL</span>
+					<span class="view-actions">
+						<button id="btn-scm-commit-all" title="Commit"><span class="codicon codicon-check"></span></button>
+						<button id="btn-scm-refresh" title="Refresh"><span class="codicon codicon-refresh"></span></button>
+						<button id="btn-scm-more" title="Views and More Actions..."><span class="codicon codicon-ellipsis"></span></button>
+					</span>
+				</div>
+				<div class="scm-section">
+					<div class="scm-sec-header" data-sec="repos"><span class="codicon codicon-chevron-down"></span> REPOSITORIES <span class="scm-sec-count" id="repos-count"></span></div>
+					<div id="scm-repos-list" class="scm-sec-body"></div>
+				</div>
+				<div class="scm-section">
+					<div class="scm-sec-header" data-sec="changes"><span class="codicon codicon-chevron-down"></span> CHANGES</div>
+					<div id="scm-changes" class="scm-sec-body"></div>
+				</div>
+				<div class="scm-section" id="scm-graph-section">
+					<div class="scm-sec-header" data-sec="graph"><span class="codicon codicon-chevron-down"></span> GRAPH</div>
+					<div id="scm-graph" class="scm-sec-body"></div>
+				</div>
+			</div>
+
+			<div class="view hidden" id="view-extensions">
+				<div class="view-title"><span>EXTENSIONS</span></div>
+				<input id="ext-input" placeholder="Search Open VSX (Enter)" spellcheck="false">
+				<div id="ext-results"></div>
+			</div>
+
+			<div class="view hidden" id="view-remote">
+				<div class="view-title">
+					<span>REMOTE SSH</span>
+					<span class="view-actions">
+						<button id="btn-ssh-add" title="Add SSH Connection"><span class="codicon codicon-add"></span></button>
+					</span>
+				</div>
+				<div id="ssh-list"></div>
+			</div>
+		</div>
+		<div id="sidebar-resizer"></div>
+
+		<div id="main">
+			<div id="tabs"></div>
+			<div id="editor-area">
+				<div id="editor"></div>
+				<div id="diffeditor" class="hidden"></div>
+				<div id="uitab" class="hidden"></div>
+				<div id="mediatab" class="hidden"></div>
+				<div id="welcome">
+					<h1>CozyCode</h1>
+					<p class="hint">F1 Commands &middot; Ctrl+P Quick Open &middot; Ctrl+` Terminal</p>
+				</div>
+			</div>
+			<div id="panel-resizer" class="hidden"></div>
+			<div id="panel" class="hidden">
+				<div id="panel-header">
+					<div id="panel-tabs">
+						<button class="panel-tab" data-panel="problems">PROBLEMS <span id="problems-count" class="pcount hidden"></span></button>
+						<button class="panel-tab active" data-panel="terminal">TERMINAL</button>
+						<button class="panel-tab" data-panel="ports">PORTS</button>
+					</div>
+					<div class="view-actions" id="panel-actions">
+						<button id="btn-term-new" title="New Terminal"><span class="codicon codicon-add"></span></button>
+						<button id="btn-term-select" title="Select Shell..."><span class="codicon codicon-chevron-down"></span></button>
+						<button id="btn-term-split" title="Split Terminal"><span class="codicon codicon-split-horizontal"></span></button>
+						<button id="btn-term-kill" title="Kill Terminal"><span class="codicon codicon-trash"></span></button>
+						<button id="btn-panel-close" title="Close Panel"><span class="codicon codicon-close"></span></button>
+					</div>
+				</div>
+				<div id="panel-body">
+					<div id="pane-problems" class="pane hidden"></div>
+					<div id="pane-terminal" class="pane">
+						<div id="term-area"></div>
+						<div id="term-tabs"></div>
+					</div>
+					<div id="pane-ports" class="pane hidden"></div>
+				</div>
+			</div>
+		</div>
+		<div id="aux-resizer" class="hidden"></div>
+		<div id="aux" class="hidden">
+			<div id="aux-header">
+				<div id="aux-modes">
+					<button class="aux-mode active" data-mode="chat">Chat</button>
+					<button class="aux-mode" data-mode="cli">Claude Code</button>
+				</div>
+				<div class="view-actions">
+					<button id="aux-clear" title="New chat"><span class="codicon codicon-add"></span></button>
+					<button id="aux-close" title="Close"><span class="codicon codicon-close"></span></button>
+				</div>
+			</div>
+			<div id="aux-chat">
+				<div id="chat-messages"></div>
+				<div id="chat-context"></div>
+				<div id="chat-inputbar">
+					<textarea id="chat-input" rows="2" placeholder="Ask Claude (Enter to send, Shift+Enter newline)"></textarea>
+					<button id="chat-send" title="Send"><span class="codicon codicon-send"></span></button>
+				</div>
+			</div>
+			<div id="aux-cli" class="hidden">
+				<div id="claude-term"></div>
+			</div>
+		</div>
+	</div>
+	<div id="panel-open-strip" title="Drag up to open panel"></div>
+
+	<div id="statusbar">
+		<span id="st-remote" class="hidden"></span>
+		<span id="st-branch" title="Checkout branch..."></span>
+		<span id="st-sync" title="Pull then Push" class="hidden"><span class="codicon codicon-sync"></span></span>
+		<span id="st-problems" title="Problems"><span class="codicon codicon-error"></span> <span id="st-err">0</span> <span class="codicon codicon-warning"></span> <span id="st-warn">0</span></span>
+		<span class="st-spacer"></span>
+		<span id="st-pos"></span>
+		<span id="st-encoding" title="Save with Encoding">UTF-8</span>
+		<span id="st-lang" title="Select Language Mode"></span>
+	</div>
+
+	<div id="palette" class="hidden">
+		<input id="palette-input" spellcheck="false" autocomplete="off">
+		<div id="palette-list"></div>
+	</div>
+	<div id="toast" class="hidden"></div>
+
+	<script src="core.js"></script>
+	<script src="explorer.js"></script>
+	<script src="scm.js"></script>
+	<script src="panel.js"></script>
+	<script src="remote.js"></script>
+	<script src="extensions.js"></script>
+	<script src="claude.js"></script>
+	<script src="settings.js"></script>
+</body>
+</html>
