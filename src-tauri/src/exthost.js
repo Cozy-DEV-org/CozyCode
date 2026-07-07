@@ -147,37 +147,65 @@ const vscode = {
 	Location: class {}, TextEdit: class { static replace(r, t) { return { range: r, newText: t }; } },
 };
 
-// intercept require('vscode')
+// intercept require('vscode') + stub common deps we don't fully implement so an
+// extension's require() doesn't hard-crash (LSP/nls stay no-ops but activate runs)
+const STUBS = {
+	vscode,
+	'vscode-nls': (() => { const f = () => (k, m) => m || k; const o = { loadMessageBundle: () => (k, m) => m || k, config: () => () => (k, m) => m || k }; return o; })(),
+};
+const NOOP_MODULES = ['vscode-languageclient', 'vscode-languageclient/node', 'vscode-languageclient/browser'];
 const origResolve = Module._resolveFilename;
 Module._resolveFilename = function (request, ...rest) {
-	if (request === 'vscode') return 'vscode';
+	if (request === 'vscode' || STUBS[request]) return request;
+	if (NOOP_MODULES.includes(request)) return request;
 	return origResolve.call(this, request, ...rest);
 };
-require.cache['vscode'] = { id: 'vscode', filename: 'vscode', loaded: true, exports: vscode };
+for (const k of Object.keys(STUBS)) require.cache[k] = { id: k, filename: k, loaded: true, exports: STUBS[k] };
+// vscode-languageclient stub: LanguageClient that no-ops (LSP not implemented yet)
+const lcStub = { LanguageClient: class { constructor() {} start() { return { dispose() {} }; } stop() { return Promise.resolve(); } onReady() { return Promise.resolve(); } onNotification() {} sendNotification() {} onRequest() {} sendRequest() { return Promise.resolve(null); } }, TransportKind: { ipc: 0, stdio: 1, pipe: 2, socket: 3 }, RevealOutputChannelOn: { Info: 1, Warn: 2, Error: 3, Never: 4 }, State: { Stopped: 1, Starting: 3, Running: 2 }, SettingMonitor: class { constructor() {} start() { return { dispose() {} }; } } };
+for (const k of NOOP_MODULES) require.cache[k] = { id: k, filename: k, loaded: true, exports: lcStub };
 
-/* ---------- load extensions ---------- */
+/* ---------- load extensions (LAZY activation like VSCode) ---------- */
 const loaded = [];
-const contributions = []; // { id, viewsContainers, views, commands }
-function activateExt(dir, base, pkg) {
-	try {
-		const mod = require(path.join(base, pkg.main));
-		if (typeof mod.activate === 'function') {
-			Promise.resolve(mod.activate({
-				subscriptions: [], extensionPath: base,
-				globalState: { get: (k, d) => d, update: async () => {}, keys: () => [] },
-				workspaceState: { get: (k, d) => d, update: async () => {}, keys: () => [] },
-				secrets: { get: async () => undefined, store: async () => {}, delete: async () => {} },
-				asAbsolutePath: r => path.join(base, r),
-				extensionUri: vscode.Uri.file(base), extensionMode: 1,
-				environmentVariableCollection: { replace: () => {}, append: () => {}, prepend: () => {} },
-			})).then(
-				() => { setStatus(dir, 'activated'); },
-				e => { setStatus(dir, 'activate failed: ' + e.message); },
-			);
-		} else setStatus(dir, 'loaded (no activate)');
-	} catch (e) { setStatus(dir, 'load failed: ' + String(e.message).slice(0, 120)); }
+const contributions = [];   // { id, viewsContainers, views, commands }
+const extIndex = new Map(); // dir -> { base, pkg, events:Set, activated:bool }
+
+function makeContext(base) {
+	return {
+		subscriptions: [], extensionPath: base,
+		globalState: { get: (k, d) => d, update: async () => {}, keys: () => [], setKeysForSync: () => {} },
+		workspaceState: { get: (k, d) => d, update: async () => {}, keys: () => [] },
+		secrets: { get: async () => undefined, store: async () => {}, delete: async () => {}, onDidChange: () => new Disposable() },
+		asAbsolutePath: r => path.join(base, r),
+		extensionUri: vscode.Uri.file(base), extensionMode: 1, extension: { id: base, packageJSON: {} },
+		environmentVariableCollection: { replace: () => {}, append: () => {}, prepend: () => {}, clear: () => {}, getScoped: () => ({ replace: () => {}, append: () => {}, prepend: () => {} }) },
+		storageUri: vscode.Uri.file(base), globalStorageUri: vscode.Uri.file(base), logUri: vscode.Uri.file(base),
+	};
 }
 function setStatus(id, status) { const e = loaded.find(x => x.id === id); if (e) e.status = status; sendLoaded(); }
+
+function activateExt(dir) {
+	const rec = extIndex.get(dir);
+	if (!rec || rec.activated) return;
+	rec.activated = true;
+	try {
+		const mod = require(path.join(rec.base, rec.pkg.main));
+		if (typeof mod.activate === 'function') {
+			Promise.resolve(mod.activate(makeContext(rec.base))).then(
+				() => setStatus(dir, 'activated'),
+				e => setStatus(dir, 'activate failed: ' + String(e && e.message).slice(0, 100)),
+			);
+		} else setStatus(dir, 'loaded');
+	} catch (e) { setStatus(dir, 'load failed: ' + String(e && e.message).slice(0, 100)); }
+}
+
+// fire an activation event -> activate any extension registered for it
+function activateByEvent(event) {
+	for (const [dir, rec] of extIndex) {
+		if (rec.activated) continue;
+		if (rec.events.has('*') || rec.events.has(event)) activateExt(dir);
+	}
+}
 
 if (extRoot && fs.existsSync(extRoot)) {
 	for (const dir of fs.readdirSync(extRoot)) {
@@ -186,20 +214,31 @@ if (extRoot && fs.existsSync(extRoot)) {
 		if (!fs.existsSync(pkgPath)) continue;
 		let pkg;
 		try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { continue; }
-		// collect contributions for the native sidebar adapter
 		const c = pkg.contributes || {};
-		const vc = ((c.viewsContainers && c.viewsContainers.activitybar) || []);
+
+		// explicit + implicit activation events (VSCode auto-generates from contributes)
+		const events = new Set(pkg.activationEvents || []);
+		for (const cm of c.commands || []) events.add('onCommand:' + cm.command);
+		for (const container in (c.views || {})) for (const v of c.views[container]) events.add('onView:' + v.id);
+		for (const l of c.languages || []) if (l.id) events.add('onLanguage:' + l.id);
+		if (!pkg.activationEvents && !events.size) events.add('*'); // very old extensions
+
+		// contributions for the native adapter
+		const vc = (c.viewsContainers && c.viewsContainers.activitybar) || [];
 		const views = [];
 		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: v.name });
 		if (vc.length || views.length || (c.commands || []).length)
 			contributions.push({ id: dir, viewsContainers: vc, views, commands: (c.commands || []).map(cm => ({ command: cm.command, title: cm.title, category: cm.category })) });
-		loaded.push({ id: dir, status: pkg.main ? 'loading' : 'no-code (themes/snippets)' });
-		if (pkg.main) activateExt(dir, base, pkg);
+
+		if (pkg.main) { extIndex.set(dir, { base, pkg, events, activated: false }); loaded.push({ id: dir, status: 'registered' }); }
+		else loaded.push({ id: dir, status: 'no-code (themes/snippets)' });
 	}
 }
 function sendLoaded() { send({ event: 'loaded', params: loaded }); }
 sendLoaded();
 send({ event: 'contributes', params: contributions });
+// activate startup extensions only (lazy for the rest)
+setTimeout(() => activateByEvent('onStartupFinished'), 50);
 
 /* ---------- rpc ---------- */
 function makeDocument(p) {
@@ -224,8 +263,10 @@ rl.on('line', async line => {
 	let msg;
 	try { msg = JSON.parse(line); } catch { return; }
 	if (msg.method === 'shutdown') process.exit(0);
+	if (msg.method === 'activateEvent') { activateByEvent(msg.params.event); if (msg.id) send({ id: msg.id, result: true }); return; }
 	if (msg.method === 'completions') {
 		const { languageId } = msg.params;
+		activateByEvent('onLanguage:' + languageId);
 		const doc = makeDocument(msg.params);
 		const pos = new Position(msg.params.line, msg.params.character);
 		const items = [];
@@ -253,6 +294,7 @@ rl.on('line', async line => {
 	// tree data for a contributed view: children of a node (or roots when no node)
 	if (msg.method === 'treeChildren') {
 		const { viewId, nodeKey } = msg.params;
+		if (!nodeKey) { activateByEvent('onView:' + viewId); await new Promise(r => setTimeout(r, 120)); }
 		const provider = treeProviders.get(viewId);
 		if (!provider) { send({ id: msg.id, result: [] }); return; }
 		try {
@@ -281,6 +323,7 @@ rl.on('line', async line => {
 		return;
 	}
 	if (msg.method === 'executeCommand') {
+		if (!commands.has(msg.params.command)) { activateByEvent('onCommand:' + msg.params.command); await new Promise(r => setTimeout(r, 120)); }
 		try { const r = await vscode.commands.executeCommand(msg.params.command, ...(msg.params.args || [])); send({ id: msg.id, result: r === undefined ? null : (typeof r === 'object' ? '[object]' : r) }); }
 		catch (e) { send({ id: msg.id, result: null, error: e.message }); }
 		return;

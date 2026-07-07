@@ -164,23 +164,52 @@ const contributedCommands = []; // {command, title, category}
 const extContainers = [];       // {id, title, icon, views:[{id,name,ready}]}
 const treeReady = new Set();    // viewIds whose provider registered
 
+const explorerViews = []; // views contributed into the built-in "explorer" container
+const BUILTIN_CONTAINERS = new Set(['explorer', 'scm', 'debug', 'test', 'remote']);
+
 function applyContributions(list) {
 	for (const c of list || []) {
 		for (const cmd of c.commands || []) if (!contributedCommands.some(x => x.command === cmd.command)) contributedCommands.push(cmd);
+		// only extensions that contribute their OWN activity-bar container get an icon
 		for (const vc of c.viewsContainers || []) {
 			if (extContainers.some(x => x.id === vc.id)) continue;
-			extContainers.push({ id: vc.id, title: vc.title || vc.id, icon: vc.icon, views: (c.views || []).filter(v => v.container === vc.id) });
+			const views = (c.views || []).filter(v => v.container === vc.id);
+			if (!views.length) continue; // a container with no views = nothing to show
+			extContainers.push({ id: vc.id, title: vc.title || vc.id, views });
 		}
-		// views contributed into built-in containers -> collect under an "Extensions" container
-		const builtins = (c.views || []).filter(v => !(c.viewsContainers || []).some(x => x.id === v.container));
-		if (builtins.length) {
-			let ec = extContainers.find(x => x.id === '__ext__');
-			if (!ec) { ec = { id: '__ext__', title: 'Extension Views', icon: '', views: [] }; extContainers.push(ec); }
-			for (const v of builtins) if (!ec.views.some(x => x.id === v.id)) ec.views.push(v);
+		// views placed into the built-in Explorer show up under the file tree (like VSCode).
+		// views in other built-in containers (debug/test/scm) are skipped — we don't fabricate icons.
+		for (const v of (c.views || [])) {
+			if (BUILTIN_CONTAINERS.has(v.container) && v.container === 'explorer' && !explorerViews.some(x => x.id === v.id))
+				explorerViews.push(v);
 		}
 	}
 	renderExtActivityButtons();
-	cozyLog('exthost', `contributions: ${extContainers.length} container(s), ${contributedCommands.length} command(s)`);
+	renderExplorerExtViews();
+	applyHiddenViews();
+	cozyLog('exthost', `contributions: ${extContainers.length} activity-bar container(s), ${explorerViews.length} explorer view(s), ${contributedCommands.length} command(s)`);
+}
+
+function renderExplorerExtViews() {
+	let host = $('#explorer-ext-views');
+	if (!host) { host = document.createElement('div'); host.id = 'explorer-ext-views'; $('#view-explorer').appendChild(host); }
+	host.innerHTML = '';
+	for (const v of explorerViews) {
+		const sec = document.createElement('div');
+		sec.className = 'ext-tree-sec';
+		const hdr = document.createElement('div');
+		hdr.className = 'scm-sec-header';
+		hdr.innerHTML = `<span class="codicon codicon-chevron-right"></span> ${esc((v.name || v.id).toUpperCase())}`;
+		const body = document.createElement('div');
+		body.className = 'ext-tree hidden';
+		hdr.onclick = () => {
+			const hid = body.classList.toggle('hidden');
+			hdr.querySelector('.codicon').className = `codicon codicon-chevron-${hid ? 'right' : 'down'}`;
+			if (!hid && !body.childElementCount) loadTreeChildren(v.id, null, body, 0);
+		};
+		sec.appendChild(hdr); sec.appendChild(body);
+		host.appendChild(sec);
+	}
 }
 
 function renderExtActivityButtons() {
@@ -388,6 +417,11 @@ async function provideCompletions(model, position) {
 	return { suggestions };
 }
 
-Object.assign(Ext, { renderView, startExtHost, provideCompletions, RECOMMENDED, applyContributions, contributedCommands, runExtCommand: (cmd, ...args) => rpc('executeCommand', { command: cmd, args }, 8000) });
+function activateLanguage(lang) {
+	if (!state.exthostReady || !lang || lang === 'plaintext') return;
+	invoke('exthost_send', { line: JSON.stringify({ method: 'activateEvent', params: { event: 'onLanguage:' + lang } }) }).catch(() => { });
+}
+
+Object.assign(Ext, { renderView, startExtHost, provideCompletions, RECOMMENDED, applyContributions, contributedCommands, activateLanguage, runExtCommand: (cmd, ...args) => rpc('executeCommand', { command: cmd, args }, 8000) });
 window.searchExtensions = searchExtensions;
 $('#ext-input').addEventListener('keydown', e => { if (e.key === 'Enter') searchExtensions(); });

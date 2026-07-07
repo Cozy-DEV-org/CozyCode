@@ -437,6 +437,7 @@ async function openFile(path, opts = {}) {
 	state.tabs.push(tab);
 	activateTab(tab.key);
 	Settings.suggestTooling(langOf(path));
+	Ext.activateLanguage(langOf(path)); // fire onLanguage for lazy extensions
 }
 
 // media viewer tab (image/video/audio/pdf/csv/xlsx) rendered with native browser + SheetJS
@@ -891,19 +892,26 @@ function loadHiddenViews() { try { return new Set(JSON.parse(localStorage.getIte
 let hiddenViews = loadHiddenViews();
 function applyHiddenViews() {
 	$$('.act-btn[data-view]').forEach(b => b.classList.toggle('hidden', hiddenViews.has(b.dataset.view)));
+	$$('.act-btn[data-extview]').forEach(b => b.classList.toggle('hidden', hiddenViews.has('ext:' + b.dataset.extview)));
 }
 function activityBarMenu(x, y) {
-	const labels = { explorer: 'Explorer', search: 'Search', scm: 'Source Control', extensions: 'Extensions', remote: 'Remote SSH' };
-	const items = Object.entries(labels).map(([v, label]) => ({
-		label: (hiddenViews.has(v) ? 'Show ' : 'Hide ') + label,
+	const items = [];
+	const builtin = { explorer: 'Explorer', search: 'Search', scm: 'Source Control', extensions: 'Extensions', remote: 'Remote SSH' };
+	for (const [v, label] of Object.entries(builtin)) items.push(toggleItem(v, label));
+	// extension-contributed containers
+	$$('.act-btn[data-extview]').forEach(b => items.push(toggleItem('ext:' + b.dataset.extview, b.title)));
+	contextMenu(x, y, items);
+}
+function toggleItem(key, label) {
+	return {
+		label: (hiddenViews.has(key) ? 'Show ' : 'Hide ') + label,
 		run: () => {
-			hiddenViews.has(v) ? hiddenViews.delete(v) : hiddenViews.add(v);
+			hiddenViews.has(key) ? hiddenViews.delete(key) : hiddenViews.add(key);
 			localStorage.setItem('cozyHiddenViews', JSON.stringify([...hiddenViews]));
 			applyHiddenViews();
-			if (hiddenViews.has(v) && currentView === v) switchView('explorer');
+			if (hiddenViews.has(key) && currentView === key) switchView('explorer');
 		},
-	}));
-	contextMenu(x, y, items);
+	};
 }
 
 function toggleSidebar() {
