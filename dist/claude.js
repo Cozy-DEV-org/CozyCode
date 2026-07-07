@@ -50,7 +50,9 @@ function setMode(mode) {
 	else startClaudeCli();
 }
 
-/* ---------- context chip ---------- */
+/* ---------- context + attachments ---------- */
+let attachments = []; // { kind:'file'|'selection'|'image', name, content?, dataUrl?, path? }
+
 function activeFileContext() {
 	const tab = findTab(state.active);
 	if (!tab || tab.kind !== 'file' || !tab.path) return null;
@@ -60,9 +62,46 @@ function activeFileContext() {
 }
 function updateContext() {
 	const ctx = activeFileContext();
-	const el = $('#chat-context');
-	if (ctx) el.innerHTML = `<span class="codicon codicon-file"></span> ${esc(ctx.name)}${ctx.selection ? ' (selection)' : ''} attached as context`;
-	else el.innerHTML = '<span class="codicon codicon-info"></span> No file open';
+	const el = $('#chat-ctxinfo');
+	el.textContent = ctx ? (ctx.name + (ctx.selection ? ' (sel)' : '')) : '';
+	renderAttachments();
+}
+function renderAttachments() {
+	const box = $('#chat-attachments');
+	box.innerHTML = '';
+	attachments.forEach((a, i) => {
+		const chip = document.createElement('span');
+		chip.className = 'chat-chip';
+		const icon = a.kind === 'image' ? 'file-media' : a.kind === 'selection' ? 'selection' : 'file';
+		chip.innerHTML = `<span class="codicon codicon-${icon}"></span>${esc(a.name)}`;
+		const x = document.createElement('button');
+		x.innerHTML = '<span class="codicon codicon-close"></span>';
+		x.onclick = () => { attachments.splice(i, 1); renderAttachments(); };
+		chip.appendChild(x);
+		box.appendChild(chip);
+	});
+}
+
+async function attachFilePick() {
+	const path = await dialog.open({ multiple: false });
+	if (!path) return;
+	const name = basename(path);
+	if (mediaCat(path) === 'image') {
+		try { const b64 = await invoke('read_file_base64', { path }); attachments.push({ kind: 'image', name, dataUrl: `data:${MIME[name.split('.').pop().toLowerCase()] || 'image/png'};base64,${b64}` }); }
+		catch (e) { toast(e); return; }
+	} else {
+		try { attachments.push({ kind: 'file', name, path, content: await invoke('read_file', { path }) }); }
+		catch (e) { toast(e); return; }
+	}
+	renderAttachments();
+}
+
+function addSelectionToChat() {
+	const ctx = activeFileContext();
+	if (!ctx || !ctx.selection) { toast('Select text in the editor first'); return; }
+	attachments.push({ kind: 'selection', name: `${ctx.name}: focus`, content: ctx.selection, path: ctx.path });
+	renderAttachments();
+	openAux(); setMode('chat');
 }
 
 /* ---------- chat ---------- */
@@ -87,32 +126,54 @@ function renderMarkdown(text) {
 	return html;
 }
 
+// resolve @mentions in the text to workspace files, append their content
+async function resolveMentions(text) {
+	const mentions = [...text.matchAll(/@([^\s@]+)/g)].map(m => m[1]);
+	let extra = '';
+	for (const rel of [...new Set(mentions)]) {
+		try {
+			const abs = joinPath(state.root, rel.replace(/\//g, state.remote ? '/' : '\\'));
+			const content = await FS.readFile(abs);
+			extra += `\n\n@${rel}:\n\`\`\`\n${content.length > 12000 ? content.slice(0, 12000) + '\n...(truncated)' : content}\n\`\`\``;
+		} catch { /* not a file */ }
+	}
+	return extra;
+}
+
 async function sendChat() {
 	const input = $('#chat-input');
 	const text = input.value.trim();
-	if (!text) return;
+	if (!text && !attachments.length) return;
 	const cfg = providerCfg();
 	if (!cfg.key && !(cfg.base || '').includes('localhost')) { toast('Set an AI API key in Settings'); Settings.openSettings(); return; }
 	input.value = '';
-	addMsg('user', text);
+	input.style.height = 'auto';
+	const shownAtt = attachments.slice();
+	addMsg('user', text + (shownAtt.length ? '\n' + shownAtt.map(a => '[' + a.name + ']').join(' ') : ''));
 	chatHistory.push({ role: 'user', content: text });
 
-	// attach active file context on first turn or when selection present
+	// build the prompt: text + @mentions + attachments + active-file/selection context
 	let prompt = text;
-	const ctx = activeFileContext();
-	if (ctx && (chatHistory.length === 1 || ctx.selection)) {
-		const body = ctx.selection || (ctx.content.length > 12000 ? ctx.content.slice(0, 12000) + '\n...(truncated)' : ctx.content);
-		prompt = `File: ${ctx.path}\n\`\`\`\n${body}\n\`\`\`\n\n${text}`;
+	prompt += await resolveMentions(text);
+	const images = [];
+	for (const a of shownAtt) {
+		if (a.kind === 'image') images.push(a.dataUrl);
+		else prompt += `\n\n[${a.kind === 'selection' ? 'Focus selection from ' : 'Attached '}${a.name}]:\n\`\`\`\n${(a.content || '').slice(0, 12000)}\n\`\`\``;
 	}
-	// include short history as plain text (keeps ai_generate single-shot simple)
+	const ctx = activeFileContext();
+	if (ctx && chatHistory.length === 1 && !text.includes('@')) {
+		const body = ctx.content.length > 12000 ? ctx.content.slice(0, 12000) + '\n...(truncated)' : ctx.content;
+		prompt = `Active file ${ctx.path}:\n\`\`\`\n${body}\n\`\`\`\n\n${prompt}`;
+	}
 	const convo = chatHistory.slice(-6, -1).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n');
 	const full = convo ? convo + '\n\nUser: ' + prompt : prompt;
 
+	attachments = []; renderAttachments();
 	const bubble = addMsg('assistant', '...');
 	try {
 		const out = await invoke('ai_generate', {
 			baseUrl: cfg.base, apiKey: cfg.key, model: cfg.model, anthropic: cfg.anthropic,
-			system: CHAT_SYSTEM, prompt: full,
+			system: CHAT_SYSTEM, prompt: full, images: images.length ? images : null,
 		});
 		bubble.innerHTML = renderMarkdown(out.trim());
 		chatHistory.push({ role: 'assistant', content: out.trim() });
@@ -120,7 +181,46 @@ async function sendChat() {
 	} catch (e) { bubble.innerHTML = renderMarkdown('Error: ' + e); }
 }
 
-function newChat() { chatHistory = []; $('#chat-messages').innerHTML = ''; updateContext(); }
+function newChat() { chatHistory = []; attachments = []; $('#chat-messages').innerHTML = ''; renderAttachments(); updateContext(); }
+
+/* ---------- @ mention autocomplete ---------- */
+let mentionActive = false, mentionSel = 0, mentionItems = [];
+async function updateMention() {
+	const input = $('#chat-input');
+	const pos = input.selectionStart;
+	const before = input.value.slice(0, pos);
+	const m = before.match(/@([^\s@]*)$/);
+	const pop = $('#mention-pop');
+	if (!m || !state.root) { pop.classList.add('hidden'); mentionActive = false; return; }
+	if (!state.fileList) { try { state.fileList = await invoke('list_files', { root: state.root }); } catch { state.fileList = []; } }
+	const q = m[1].toLowerCase();
+	mentionItems = state.fileList.filter(f => f.toLowerCase().includes(q)).slice(0, 8);
+	if (!mentionItems.length) { pop.classList.add('hidden'); mentionActive = false; return; }
+	mentionActive = true; mentionSel = 0;
+	renderMention();
+}
+function renderMention() {
+	const pop = $('#mention-pop');
+	pop.innerHTML = '';
+	mentionItems.forEach((f, i) => {
+		const d = document.createElement('div');
+		d.className = 'mention-item' + (i === mentionSel ? ' selected' : '');
+		d.appendChild(fileIconImg(basename(f)));
+		const s = document.createElement('span'); s.textContent = f; d.appendChild(s);
+		d.onclick = () => pickMention(f);
+		pop.appendChild(d);
+	});
+	pop.classList.remove('hidden');
+}
+function pickMention(f) {
+	const input = $('#chat-input');
+	const pos = input.selectionStart;
+	const before = input.value.slice(0, pos).replace(/@([^\s@]*)$/, '@' + f + ' ');
+	input.value = before + input.value.slice(pos);
+	$('#mention-pop').classList.add('hidden');
+	mentionActive = false;
+	input.focus();
+}
 
 /* ---------- Claude Code CLI ---------- */
 async function startClaudeCli() {
@@ -177,9 +277,39 @@ $('#aux-close').onclick = closeAux;
 $('#aux-clear').onclick = () => auxMode === 'chat' ? newChat() : (claudePty && invoke('pty_write', { id: claudePty, data: '\x0c' }));
 $$('.aux-mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));
 $('#chat-send').onclick = sendChat;
-$('#chat-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
-// keep context chip fresh when switching tabs handled via focus
-$('#chat-input').addEventListener('focus', updateContext);
+$('#chat-attach').onclick = attachFilePick;
+$('#chat-addsel').onclick = addSelectionToChat;
+
+const chatInput = $('#chat-input');
+chatInput.addEventListener('input', () => {
+	chatInput.style.height = 'auto';
+	chatInput.style.height = Math.min(160, chatInput.scrollHeight) + 'px';
+	updateMention();
+});
+chatInput.addEventListener('keydown', e => {
+	if (mentionActive) {
+		if (e.key === 'ArrowDown') { mentionSel = Math.min(mentionSel + 1, mentionItems.length - 1); renderMention(); e.preventDefault(); return; }
+		if (e.key === 'ArrowUp') { mentionSel = Math.max(mentionSel - 1, 0); renderMention(); e.preventDefault(); return; }
+		if (e.key === 'Enter' || e.key === 'Tab') { pickMention(mentionItems[mentionSel]); e.preventDefault(); return; }
+		if (e.key === 'Escape') { $('#mention-pop').classList.add('hidden'); mentionActive = false; return; }
+	}
+	if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+// paste an image from the clipboard -> attach (vision, if the model supports it)
+chatInput.addEventListener('paste', e => {
+	const items = e.clipboardData && e.clipboardData.items;
+	if (!items) return;
+	for (const it of items) {
+		if (it.type.startsWith('image/')) {
+			const blob = it.getAsFile();
+			const reader = new FileReader();
+			reader.onload = () => { attachments.push({ kind: 'image', name: 'pasted-image.png', dataUrl: reader.result }); renderAttachments(); toast('Image attached (works if the model supports vision)', 3500); };
+			reader.readAsDataURL(blob);
+			e.preventDefault();
+		}
+	}
+});
+chatInput.addEventListener('focus', updateContext);
 
 // resizer (drag left edge)
 $('#aux-resizer').addEventListener('mousedown', e => {

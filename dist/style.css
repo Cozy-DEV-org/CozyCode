@@ -28,13 +28,14 @@ body {
 }
 .menu-btn:hover, .menu-btn.open { background: rgba(255,255,255,.1); }
 #tb-title { flex: 1; text-align: center; color: var(--fg-dim); overflow: hidden; white-space: nowrap; }
-#tb-claude {
+#tb-claude, #tb-run {
 	background: none; border: none; color: var(--fg-dim); cursor: pointer; height: 100%; padding: 0 10px;
 	font-family: inherit; font-size: 12px; display: flex; align-items: center; gap: 4px; flex-shrink: 0;
 }
-#tb-claude:hover { background: rgba(255,255,255,.1); color: var(--fg); }
+#tb-claude:hover, #tb-run:hover { background: rgba(255,255,255,.1); color: var(--fg); }
 #tb-claude.active { color: #d98a4b; }
-#tb-claude .codicon { font-size: 14px; }
+#tb-claude .codicon, #tb-run .codicon { font-size: 14px; }
+#tb-run:hover .codicon { color: #73c991; }
 .cli-install { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; text-align: center; padding: 20px; color: var(--fg); }
 .cli-install .desc { color: var(--fg-dim); font-size: 11px; }
 #window-controls { display: flex; height: 100%; }
@@ -369,11 +370,20 @@ button.primary:hover { filter: brightness(1.15); }
 .modal { background: var(--sidebar); border: 1px solid var(--border); border-radius: 6px; padding: 20px; width: 420px; max-width: 90vw; box-shadow: 0 8px 24px rgba(0,0,0,.6); }
 .modal-title { font-size: 14px; margin-bottom: 8px; color: var(--fg); }
 .modal-msg { font-size: 12px; color: var(--fg-dim); margin-bottom: 18px; }
+/* RULE: dialog buttons are fixed-size and equal — never full-width/lopsided.
+   The global `button.primary { width:100% }` must be overridden here (that rule
+   is only for sidebar action buttons). Do NOT reintroduce stretched dialog buttons. */
 .modal-btns { display: flex; justify-content: flex-end; gap: 8px; }
-.modal-btn { padding: 6px 14px; border: 1px solid var(--border); background: var(--input); color: var(--fg); cursor: pointer; border-radius: 3px; font-family: inherit; font-size: 13px; }
+.modal-btn {
+	width: auto; min-width: 92px; height: 30px; padding: 0 16px; box-sizing: border-box;
+	border: 1px solid var(--border); background: var(--input); color: var(--fg); cursor: pointer;
+	border-radius: 4px; font-family: inherit; font-size: 13px; display: inline-flex;
+	align-items: center; justify-content: center;
+}
 .modal-btn:hover { background: var(--hover); }
-.modal-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.modal-btn.primary { width: auto; background: var(--accent); border-color: var(--accent); color: #fff; }
 .modal-btn.primary:hover { filter: brightness(1.15); }
+.about-modal .modal-btns { justify-content: center; }
 .st-spacer { flex: 1; }
 
 /* ---------- palette / quick open ---------- */
@@ -417,12 +427,24 @@ button.primary:hover { filter: brightness(1.15); }
 .chat-msg.user .bubble { background: var(--accent); color: #fff; border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; }
 .chat-msg .bubble pre { background: #00000040; padding: 8px; border-radius: 4px; overflow-x: auto; margin: 6px 0; }
 .chat-msg .bubble code { font-family: Consolas, monospace; font-size: 12px; }
-#chat-context { padding: 4px 10px; font-size: 11px; color: var(--fg-dim); border-top: 1px solid var(--border); display: flex; align-items: center; gap: 4px; }
-#chat-inputbar { display: flex; padding: 8px; gap: 6px; border-top: 1px solid var(--border); align-items: flex-end; }
-#chat-input { flex: 1; background: var(--input); border: 1px solid transparent; color: var(--fg); padding: 6px 8px; font-family: inherit; font-size: 13px; outline: none; resize: none; max-height: 160px; }
-#chat-input:focus { border-color: var(--status); }
-#chat-send { background: var(--accent); border: none; color: #fff; cursor: pointer; padding: 7px 9px; border-radius: 3px; }
+#chat-attachments { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px; }
+.chat-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--input); border: 1px solid var(--border); border-radius: 10px; padding: 1px 4px 1px 8px; font-size: 11px; color: var(--fg); }
+.chat-chip .codicon { font-size: 12px; }
+.chat-chip button { background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 0 2px; }
+.chat-chip button:hover { color: #fff; }
+/* input box: bordered card with textarea + toolbar, VSCode-ish */
+#chat-inputwrap { position: relative; margin: 6px 8px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--input); }
+#chat-inputwrap:focus-within { border-color: var(--status); }
+#chat-input { display: block; width: 100%; background: none; border: none; color: var(--fg); padding: 8px 8px 2px; font-family: inherit; font-size: 13px; outline: none; resize: none; box-sizing: border-box; }
+#chat-toolbar { display: flex; align-items: center; gap: 2px; padding: 2px 4px 4px; }
+#chat-toolbar button { background: none; border: none; color: var(--fg-dim); cursor: pointer; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; }
+#chat-toolbar button:hover { color: #fff; background: var(--hover); }
+#chat-ctxinfo { flex: 1; color: var(--fg-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 4px; }
+#chat-send { color: #fff !important; background: var(--accent) !important; }
 #chat-send:hover { filter: brightness(1.15); }
+#mention-pop { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--sidebar); border: 1px solid var(--border); border-radius: 4px; max-height: 200px; overflow-y: auto; box-shadow: 0 4px 12px rgba(0,0,0,.5); z-index: 10; }
+.mention-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.mention-item.selected, .mention-item:hover { background: var(--list-sel); color: #fff; }
 #claude-term { flex: 1; padding: 4px; min-height: 0; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }

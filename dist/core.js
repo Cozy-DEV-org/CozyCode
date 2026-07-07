@@ -23,6 +23,15 @@ const state = {
 	rpcId: 1, rpcWaiters: new Map(),
 };
 
+// Safety net: a single unhandled error must never silently freeze the whole UI.
+// Surface it instead of leaving the app looking "stuck / can't type".
+window.addEventListener('error', e => {
+	try { console.error('[cozy]', e.error || e.message); toast('Error: ' + (e.message || e.error), 5000); } catch { }
+});
+window.addEventListener('unhandledrejection', e => {
+	try { console.error('[cozy] promise', e.reason); } catch { }
+});
+
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const basename = p => String(p).replace(/[\\/]+$/, '').split(/[\\/]/).pop();

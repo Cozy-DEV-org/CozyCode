@@ -17,6 +17,7 @@
 		<img id="tb-logo" src="logo.svg" alt="">
 		<div id="menubar"></div>
 		<div id="tb-title" data-tauri-drag-region>CozyCode</div>
+		<button id="tb-run" title="Run active file (F5)"><span class="codicon codicon-play"></span></button>
 		<button id="tb-claude" title="Toggle Claude (Ctrl+Shift+A)"><span class="codicon codicon-sparkle"></span> Claude</button>
 		<div id="window-controls">
 			<button id="win-min" title="Minimize"><span class="codicon codicon-chrome-minimize"></span></button>
@@ -156,10 +157,16 @@
 			</div>
 			<div id="aux-chat">
 				<div id="chat-messages"></div>
-				<div id="chat-context"></div>
-				<div id="chat-inputbar">
-					<textarea id="chat-input" rows="2" placeholder="Ask Claude (Enter to send, Shift+Enter newline)"></textarea>
-					<button id="chat-send" title="Send"><span class="codicon codicon-send"></span></button>
+				<div id="chat-attachments"></div>
+				<div id="chat-inputwrap">
+					<div id="mention-pop" class="hidden"></div>
+					<textarea id="chat-input" rows="1" placeholder="Ask Claude  (@ to mention a file, Enter to send)"></textarea>
+					<div id="chat-toolbar">
+						<button id="chat-attach" title="Attach file"><span class="codicon codicon-attach"></span></button>
+						<button id="chat-addsel" title="Add editor selection"><span class="codicon codicon-add"></span></button>
+						<span id="chat-ctxinfo"></span>
+						<button id="chat-send" title="Send (Enter)"><span class="codicon codicon-send"></span></button>
+					</div>
 				</div>
 			</div>
 			<div id="aux-cli" class="hidden">

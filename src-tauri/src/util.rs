@@ -3,24 +3,13 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-// Portable data dir: keep extensions/settings next to the program when that dir
-// is writable (portable install), else fall back to %APPDATA%\CozyCode.
-// ponytail: probe-write once; good enough — no need to cache across the process.
+// Portable data dir: ALWAYS next to the program (`<exe dir>/data`). User data and
+// extensions live in the install folder only — no roaming/appdata copy.
 pub fn data_dir() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let data = dir.join("data");
-            if std::fs::create_dir_all(&data).is_ok() {
-                let probe = data.join(".w");
-                if std::fs::write(&probe, b"1").is_ok() {
-                    let _ = std::fs::remove_file(&probe);
-                    return data;
-                }
-            }
-        }
-    }
-    let base = std::env::var("APPDATA").unwrap_or_else(|_| ".".into());
-    let dir = PathBuf::from(base).join("CozyCode");
+    let dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("data")))
+        .unwrap_or_else(|| PathBuf::from("data"));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }

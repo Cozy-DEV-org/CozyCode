@@ -9,6 +9,15 @@ fn sanitize_token(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_graphic() && *c != '\'' && *c != '"').collect()
 }
 
+// "data:image/png;base64,AAAA" -> ("image/png", "AAAA")
+fn parse_data_url(d: &str) -> Option<(String, String)> {
+    let rest = d.strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(",")?;
+    let mt = meta.split(';').next().unwrap_or("image/png").to_string();
+    Some((mt, data.to_string()))
+}
+
+// images: optional list of data URLs ("data:image/png;base64,....") for vision models
 #[tauri::command]
 pub fn ai_generate(
     base_url: String,
@@ -17,6 +26,7 @@ pub fn ai_generate(
     anthropic: bool,
     system: String,
     prompt: String,
+    images: Option<Vec<String>>,
 ) -> Result<String, String> {
     let key = sanitize_token(&api_key);
     let url_ok = base_url.starts_with("https://") || base_url.starts_with("http://");
@@ -25,15 +35,41 @@ pub fn ai_generate(
     }
     let url = sanitize_token(base_url.trim_end_matches('/'));
 
+    let imgs = images.unwrap_or_default();
+    let has_imgs = !imgs.is_empty();
+
     let body = if anthropic {
+        let content = if has_imgs {
+            let mut blocks = vec![serde_json::json!({"type": "text", "text": prompt})];
+            for d in &imgs {
+                if let Some((mt, data)) = parse_data_url(d) {
+                    blocks.push(serde_json::json!({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": mt, "data": data}
+                    }));
+                }
+            }
+            serde_json::Value::Array(blocks)
+        } else {
+            serde_json::Value::String(prompt.clone())
+        };
         serde_json::json!({
-            "model": model, "max_tokens": 1024, "system": system,
-            "messages": [{"role": "user", "content": prompt}]
+            "model": model, "max_tokens": 2048, "system": system,
+            "messages": [{"role": "user", "content": content}]
         })
     } else {
+        let content = if has_imgs {
+            let mut blocks = vec![serde_json::json!({"type": "text", "text": prompt})];
+            for d in &imgs {
+                blocks.push(serde_json::json!({"type": "image_url", "image_url": {"url": d}}));
+            }
+            serde_json::Value::Array(blocks)
+        } else {
+            serde_json::Value::String(prompt.clone())
+        };
         serde_json::json!({
             "model": model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}]
         })
     };
     let tmp = std::env::temp_dir().join("cozy_ai_body.json");

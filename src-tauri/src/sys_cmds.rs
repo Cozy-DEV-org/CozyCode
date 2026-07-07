@@ -157,6 +157,34 @@ pub fn check_update() -> Result<serde_json::Value, String> {
     serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).map_err(|e| e.to_string())
 }
 
+// Detect language runtimes on PATH (for the Run/Debug button). Returns
+// { name: version_or_"" } for those found.
+#[tauri::command]
+pub fn detect_runtimes() -> serde_json::Value {
+    let mut m = serde_json::Map::new();
+    for (name, arg) in [
+        ("node", "--version"),
+        ("bun", "--version"),
+        ("python", "--version"),
+        ("go", "version"),
+        ("cargo", "--version"),
+        ("rustc", "--version"),
+        ("deno", "--version"),
+        ("php", "--version"),
+    ] {
+        if which(name).is_some() {
+            let ver = crate::util::command(name)
+                .arg(arg)
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").trim().to_string())
+                .unwrap_or_default();
+            m.insert(name.to_string(), serde_json::Value::String(ver));
+        }
+    }
+    serde_json::Value::Object(m)
+}
+
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {

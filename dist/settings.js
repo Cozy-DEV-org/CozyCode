@@ -117,6 +117,7 @@ const DEFAULT_KEYS = {
 	'workbench.action.zoomIn': 'Ctrl+=',
 	'workbench.action.zoomOut': 'Ctrl+-',
 	'workbench.action.zoomReset': 'Ctrl+0',
+	'workbench.action.run': 'F5',
 };
 function loadKeys() { try { return { ...DEFAULT_KEYS, ...JSON.parse(localStorage.getItem('cozyKeys') || '{}') }; } catch { return { ...DEFAULT_KEYS }; } }
 let KEYS = loadKeys();
@@ -142,6 +143,7 @@ const COMMAND_FNS = {
 	'workbench.action.zoomIn': () => zoomIn(),
 	'workbench.action.zoomOut': () => zoomOut(),
 	'workbench.action.zoomReset': () => zoomReset(),
+	'workbench.action.run': () => runActiveFile(),
 };
 
 function eventToCombo(e) {
@@ -298,6 +300,46 @@ async function suggestTooling(langId) {
 	_suggested.add(langId);
 	try { if ((await invoke('ext_list')).some(e => e.id === s[0])) return; } catch { }
 	toast(`No formatter for ${langId}. Recommended: ${s[1]}. Open Extensions to install.`, 6000);
+}
+
+/* ================= Run active file ================= */
+// commands follow each language's official CLI (node/bun/python/go/cargo/etc.)
+async function runActiveFile() {
+	const tab = findTab(state.active);
+	if (!tab || tab.kind !== 'file' || !tab.path) { toast('Open a file to run'); return; }
+	if (tab.dirty) await saveActive();
+	const rt = state.runtimes || (state.runtimes = await invoke('detect_runtimes').catch(() => ({})));
+	const lang = tab.model.getLanguageId();
+	const file = tab.path;
+	const q = p => `"${p}"`;
+	let cmd = null;
+	const has = k => rt[k] !== undefined;
+	switch (lang) {
+		case 'javascript': cmd = has('node') ? `node ${q(file)}` : has('bun') ? `bun ${q(file)}` : null; break;
+		case 'typescript': cmd = has('bun') ? `bun ${q(file)}` : has('deno') ? `deno run ${q(file)}` : has('node') ? `npx tsx ${q(file)}` : null; break;
+		case 'python': cmd = has('python') ? `python ${q(file)}` : null; break;
+		case 'go': cmd = has('go') ? `go run ${q(file)}` : null; break;
+		case 'php': cmd = has('php') ? `php ${q(file)}` : null; break;
+		case 'rust':
+			// cargo run if inside a crate, else rustc single file
+			cmd = has('cargo') && Git.repoOf(file) ? `cargo run` : has('rustc') ? `rustc ${q(file)} -o "%TEMP%\\cozyrun.exe" && "%TEMP%\\cozyrun.exe"` : null;
+			break;
+		case 'shell': cmd = `bash ${q(file)}`; break;
+		case 'bat': cmd = q(file); break;
+		case 'powershell': cmd = `powershell -File ${q(file)}`; break;
+		default: cmd = null;
+	}
+	if (!cmd) {
+		const need = { javascript: 'Node.js or Bun', typescript: 'Bun/Deno/tsx', python: 'Python', go: 'Go', rust: 'Rust', php: 'PHP' }[lang] || 'a runtime';
+		toast(`No runtime to run ${lang}. Install ${need}.`, 5000);
+		return;
+	}
+	Panel.showPanel('terminal');
+	await Panel.newTerminal(false);
+	setTimeout(() => {
+		const t = Panel.activeTerminal();
+		if (t && t.ptyId) invoke('pty_write', { id: t.ptyId, data: cmd + '\r' });
+	}, 700);
 }
 
 /* ================= formatter ================= */
@@ -534,6 +576,7 @@ for (const name of Object.keys(MENUS)) {
 document.addEventListener('click', e => { if (!e.target.closest('.menu-dropdown, .menu-btn')) closeMenus(); });
 
 /* ================= window controls + wiring ================= */
+$('#tb-run').onclick = runActiveFile;
 $('#win-min').onclick = () => appWindow.minimize();
 $('#win-max').onclick = () => appWindow.toggleMaximize();
 $('#win-close').onclick = () => appWindow.close();
@@ -594,41 +637,83 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.8.1';
 
-// Self-update via the Tauri updater plugin: check GitHub latest.json, download the
-// signed artifact, install, relaunch. Falls back to opening the release page.
-async function checkForUpdate(el) {
-	el.textContent = 'Checking for updates...';
+// Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
+// unless an update is found and not skipped). Otherwise report status into `el`.
+async function checkForUpdate(el, silent) {
+	const set = t => { if (el) el.textContent = t; };
+	set('Checking for updates...');
 	const U = window.__TAURI__ && window.__TAURI__.updater;
-	const P = window.__TAURI__ && window.__TAURI__.process;
 	try {
 		if (U && U.check) {
 			const update = await U.check();
 			if (update && update.available) {
-				el.innerHTML = `Update <b>v${esc(update.version)}</b> available. <a href="#" id="upd-go" style="color:var(--status)">Install now</a>`;
-				$('#upd-go').onclick = async ev => {
-					ev.preventDefault();
-					el.textContent = 'Downloading update...';
-					try {
-						await update.downloadAndInstall();
-						el.textContent = 'Installed. Restarting...';
-						if (P && P.relaunch) await P.relaunch();
-					} catch (e) { el.textContent = 'Update failed: ' + e; }
-				};
-			} else el.textContent = 'You are on the latest version (' + APP_VERSION + ').';
+				if (silent && localStorage.getItem('cozySkipVersion') === update.version) return;
+				promptUpdate(update);
+				set('Update v' + update.version + ' available.');
+			} else set('You are on the latest version (' + APP_VERSION + ').');
 			return;
 		}
-	} catch (e) { /* fall through to manual */ }
-	// fallback: manual check via GitHub API + open release page
+	} catch (e) { if (!silent) set('Updater unavailable, checking GitHub...'); }
+	// fallback: GitHub API + open release page
 	try {
 		const r = await invoke('check_update');
 		const latest = (r.tag_name || '').replace(/^v/, '');
 		if (latest && latest !== APP_VERSION) {
-			el.innerHTML = `Update <b>v${esc(latest)}</b> available. <a href="#" id="upd-go" style="color:var(--status)">Download</a>`;
-			$('#upd-go').onclick = e => { e.preventDefault(); invoke('open_url', { url: r.html_url }); };
-		} else el.textContent = 'You are on the latest version (' + APP_VERSION + ').';
-	} catch (e) { el.textContent = 'Update check failed: ' + e; }
+			if (silent && localStorage.getItem('cozySkipVersion') === latest) return;
+			promptUpdateManual(latest, r.html_url);
+			set('Update v' + latest + ' available.');
+		} else set('You are on the latest version (' + APP_VERSION + ').');
+	} catch (e) { if (!silent) set('Update check failed: ' + e); }
+}
+
+// VSCode-style update prompt: Install Now / Remind Me Later / Skip This Version
+function promptUpdate(update) {
+	modalPrompt(
+		`Update Available`,
+		`CozyCode v${update.version} is available (you have v${APP_VERSION}). Install now?`,
+		[
+			['Install Now', 'primary', async () => {
+				const box = modalPrompt('Updating', 'Downloading update...', []);
+				try {
+					await update.downloadAndInstall();
+					const P = window.__TAURI__ && window.__TAURI__.process;
+					if (P && P.relaunch) await P.relaunch();
+				} catch (e) { toast('Update failed: ' + e, 6000); box && box.remove(); }
+			}],
+			['Remind Me Later', '', () => { }],
+			['Skip This Version', '', () => localStorage.setItem('cozySkipVersion', update.version)],
+		]);
+}
+function promptUpdateManual(version, url) {
+	modalPrompt('Update Available',
+		`CozyCode v${version} is available. Download from GitHub?`,
+		[
+			['Download', 'primary', () => invoke('open_url', { url })],
+			['Remind Me Later', '', () => { }],
+			['Skip This Version', '', () => localStorage.setItem('cozySkipVersion', version)],
+		]);
+}
+
+// generic 3-button modal (reuses the dialog button system — fixed-size buttons)
+function modalPrompt(title, msg, buttons) {
+	const overlay = document.createElement('div');
+	overlay.className = 'modal-overlay';
+	overlay.innerHTML = `<div class="modal">
+		<div class="modal-title">${esc(title)}</div>
+		<div class="modal-msg">${esc(msg)}</div>
+		<div class="modal-btns"></div></div>`;
+	const btns = overlay.querySelector('.modal-btns');
+	for (const [label, cls, fn] of buttons) {
+		const b = document.createElement('button');
+		b.className = 'modal-btn' + (cls ? ' ' + cls : '');
+		b.textContent = label;
+		b.onclick = () => { overlay.remove(); fn(); };
+		btns.appendChild(b);
+	}
+	document.body.appendChild(overlay);
+	return overlay;
 }
 
 function showAbout() {
@@ -686,30 +771,40 @@ Object.assign(Settings, {
 });
 
 /* ================= startup ================= */
+// each step guarded so one failure can't halt the rest (prevents "frozen" UI)
 (async () => {
-	await loadSettings();
-	renderAccount();
-	Panel.updateProblemsStatus();
-	await restoreTheme();
+	try { await loadSettings(); } catch (e) { console.error(e); }
+	try { renderAccount(); Panel.updateProblemsStatus(); } catch (e) { console.error(e); }
+	try { await restoreTheme(); } catch (e) { console.error(e); }
 
-	// register the "Open with CozyCode" context menu once
-	if (!localStorage.getItem('cozyCtxMenu')) {
-		invoke('register_context_menu').then(() => localStorage.setItem('cozyCtxMenu', '1')).catch(() => { });
-	}
+	// register the "Open with CozyCode" context menu once (non-fatal)
+	try {
+		if (!localStorage.getItem('cozyCtxMenu'))
+			invoke('register_context_menu').then(() => localStorage.setItem('cozyCtxMenu', '1')).catch(() => { });
+	} catch { }
 
 	// launched via "Open with CozyCode" / double-click a file or folder?
 	let target = null;
 	try { target = await invoke('launch_target'); } catch { }
-	if (target && target.path) {
-		if (target.is_dir) await openFolder(target.path);
-		else {
-			// open the file's folder as the workspace, then pin the file
-			await openFolder(dirname(target.path.replace(/\//g, '\\')) || target.path);
-			await openFile(target.path, { preview: false });
+	try {
+		if (target && target.path) {
+			if (target.is_dir) await openFolder(target.path);
+			else {
+				await openFolder(dirname(target.path.replace(/\//g, '\\')) || target.path);
+				await openFile(target.path, { preview: false });
+			}
+		} else {
+			const last = localStorage.getItem('cozyLastFolder');
+			if (last) { try { await invoke('list_dir', { path: last }); await openFolder(last); } catch { localStorage.removeItem('cozyLastFolder'); } }
 		}
-		return;
-	}
+	} catch (e) { console.error(e); }
 
-	const last = localStorage.getItem('cozyLastFolder');
-	if (last) { try { await invoke('list_dir', { path: last }); await openFolder(last); } catch { localStorage.removeItem('cozyLastFolder'); } }
+	// auto check for updates once per day (silent unless one is found)
+	try {
+		const lastChk = +(localStorage.getItem('cozyUpdChk') || 0);
+		if (Date.now() - lastChk > 86400000) {
+			localStorage.setItem('cozyUpdChk', String(Date.now()));
+			setTimeout(() => checkForUpdate(null, true), 4000);
+		}
+	} catch { }
 })();

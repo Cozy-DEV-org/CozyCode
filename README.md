@@ -23,13 +23,26 @@ VS Code is great but heavy — Electron plus a handful of Node processes idle ar
 
 ## Build from source
 
-Requires the Rust toolchain and, on Windows, MSVC Build Tools + WebView2.
+Requires the [Rust toolchain](https://rustup.rs) and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS.
 
 ```sh
 cd src-tauri
 cargo build --release
-# binary: src-tauri/target/release/cozycode.exe
 ```
+
+### Installers / cross-platform
+
+CozyCode is a Tauri app and builds for **Windows, macOS, and Linux**. Install the Tauri CLI (`cargo install tauri-cli --version "^2"`), then:
+
+```sh
+cargo tauri build
+```
+
+- **Windows** → `.exe` (NSIS) + `.msi`, in `src-tauri/target/release/bundle/`
+- **macOS** → `.dmg` + `.app` (run on macOS; universal via `--target universal-apple-darwin`)
+- **Linux** → `.deb` + `.AppImage` + `.rpm`
+
+On macOS/Linux set `bundle.targets` in `tauri.conf.json` to `"all"` (or omit) so the platform's default bundlers are used — the committed config lists Windows bundlers (`nsis`, `msi`). Self-update signing uses the key referenced by `TAURI_SIGNING_PRIVATE_KEY`.
 
 Dev run: `cargo run` (from `src-tauri/`).
 
