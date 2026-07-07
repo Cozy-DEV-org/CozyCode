@@ -279,7 +279,15 @@ button.primary:hover { filter: brightness(1.15); }
 .ext-desc { color: var(--fg-dim); font-size: 12px; max-height: 34px; overflow: hidden; word-break: break-word; }
 .ext-meta { color: var(--fg-dim); font-size: 11px; display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
 .ext-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.ext-meta .ext-btn { margin-left: auto; flex-shrink: 0; }
+.ext-meta .ext-btn { flex-shrink: 0; }
+.ext-meta .uninstall { margin-left: auto; }
+.ext-cat-header { display: flex; align-items: center; gap: 4px; padding: 5px 12px; font-size: 11px; font-weight: 700; color: var(--fg); cursor: pointer; letter-spacing: .3px; }
+.ext-cat-header:hover { background: var(--hover); }
+.ext-cat-header .codicon { font-size: 14px; }
+.ext-cat-body { display: flex; flex-direction: column; }
+.ext-card.ext-disabled { opacity: .55; }
+.ext-auto { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--fg-dim); cursor: pointer; }
+.ext-auto input { margin: 0; }
 .ext-btn {
 	background: var(--accent); border: none; color: #fff; font-size: 11px; padding: 2px 8px;
 	border-radius: 2px; cursor: pointer;

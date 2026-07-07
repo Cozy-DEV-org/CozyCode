@@ -81,6 +81,39 @@ pub struct ExtInfo {
     pub description: String,
     pub version: String,
     pub themes: Vec<ThemeContrib>,
+    pub enabled: bool,
+    pub auto_update: bool,
+}
+
+// per-extension state (enabled / auto-update) stored in data/extensions/.state.json
+fn state_path() -> Result<PathBuf, String> {
+    Ok(ext_root()?.join(".state.json"))
+}
+fn read_state() -> serde_json::Value {
+    state_path()
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+fn write_state(v: &serde_json::Value) -> Result<(), String> {
+    std::fs::write(state_path()?, serde_json::to_string_pretty(v).unwrap_or_default()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ext_set_state(id: String, enabled: bool, auto_update: bool) -> Result<(), String> {
+    let mut s = read_state();
+    s[&id] = serde_json::json!({ "enabled": enabled, "autoUpdate": auto_update });
+    write_state(&s)
+}
+
+// ids that are disabled -> exthost skips them
+#[tauri::command]
+pub async fn ext_disabled_ids() -> Vec<String> {
+    let s = read_state();
+    s.as_object()
+        .map(|o| o.iter().filter(|(_, v)| v["enabled"] == serde_json::json!(false)).map(|(k, _)| k.clone()).collect())
+        .unwrap_or_default()
 }
 
 // One-time import of installed VS Code extensions into CozyCode's ext dir.
@@ -129,6 +162,7 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()>
 #[tauri::command]
 pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
     let root = ext_root()?;
+    let state = read_state();
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())?.flatten() {
         let ext_dir = entry.path().join("extension");
@@ -136,6 +170,7 @@ pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
         let Ok(raw) = std::fs::read_to_string(&pkg_path) else { continue };
         let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
         let id = entry.file_name().to_string_lossy().into_owned();
+        let st = &state[&id];
         let mut themes = Vec::new();
         if let Some(arr) = pkg["contributes"]["themes"].as_array() {
             for t in arr {
@@ -154,6 +189,8 @@ pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
             description: pkg["description"].as_str().unwrap_or("").chars().take(200).collect(),
             version: pkg["version"].as_str().unwrap_or("").to_string(),
             themes,
+            enabled: st["enabled"] != serde_json::json!(false), // default enabled
+            auto_update: st["autoUpdate"] == serde_json::json!(true),
         });
     }
     Ok(out)

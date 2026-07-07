@@ -30,10 +30,11 @@ async function renderView(searchResults) {
 		return;
 	}
 
-	// browse mode
-	box.appendChild(catHeader(`INSTALLED (${installed.length})`));
-	if (!installed.length) box.appendChild(dim('No extensions installed yet.'));
-	for (const ext of installed) box.appendChild(installedCard(ext));
+	// browse mode — collapsible INSTALLED section
+	const [ih, ib] = collapsible(`INSTALLED (${installed.length})`, 'ext-cat-installed');
+	box.appendChild(ih); box.appendChild(ib);
+	if (!installed.length) ib.appendChild(dim('No extensions installed yet.'));
+	for (const ext of installed) ib.appendChild(installedCard(ext));
 
 	// workspace recommendations from .vscode/extensions.json
 	const wr = (state.workspaceRecommend || []).filter(id => !installedIds.has(id));
@@ -59,7 +60,9 @@ async function renderView(searchResults) {
 		}
 	}
 
-	box.appendChild(catHeader('RECOMMENDED'));
+	const [rh, rb] = collapsible('RECOMMENDED', 'ext-cat-recommended');
+	box.appendChild(rh); box.appendChild(rb);
+	const recBox = rb;
 	for (const r of RECOMMENDED) {
 		if (installedIds.has(r.id)) continue;
 		const card = document.createElement('div');
@@ -78,12 +81,27 @@ async function renderView(searchResults) {
 		meta.appendChild(btn);
 		info.appendChild(meta);
 		card.appendChild(info);
-		box.appendChild(card);
+		recBox.appendChild(card);
 	}
 }
 
 const catHeader = t => { const d = document.createElement('div'); d.className = 'scm-group-title'; d.textContent = t; return d; };
 const dim = t => { const d = document.createElement('div'); d.className = 'scm-group-title'; d.style.cssText = 'padding:8px 12px;color:var(--fg-dim)'; d.textContent = t; return d; };
+// collapsible category: returns [header, body]; remembers open/closed in localStorage
+function collapsible(title, key) {
+	const collapsed = localStorage.getItem('cozyExtCat:' + key) === '0';
+	const h = document.createElement('div');
+	h.className = 'ext-cat-header';
+	h.innerHTML = `<span class="codicon codicon-chevron-${collapsed ? 'right' : 'down'}"></span> ${esc(title)}`;
+	const b = document.createElement('div');
+	b.className = 'ext-cat-body' + (collapsed ? ' hidden' : '');
+	h.onclick = () => {
+		const hid = b.classList.toggle('hidden');
+		h.querySelector('.codicon').className = `codicon codicon-chevron-${hid ? 'right' : 'down'}`;
+		localStorage.setItem('cozyExtCat:' + key, hid ? '0' : '1');
+	};
+	return [h, b];
+}
 
 let lastSearch = null;
 function refreshExtView() { renderView(lastSearch); }
@@ -98,10 +116,28 @@ function installedCard(ext) {
 	const meta = document.createElement('div');
 	meta.className = 'ext-meta';
 	meta.innerHTML = `<span>${esc(ext.id)} v${esc(ext.version)}</span>`;
+	if (!ext.enabled) { card.classList.add('ext-disabled'); meta.querySelector('span').textContent += ' (disabled)'; }
+	// Enable/Disable toggle
+	const toggle = document.createElement('button');
+	toggle.className = 'ext-btn';
+	toggle.textContent = ext.enabled ? 'Disable' : 'Enable';
+	toggle.onclick = async () => {
+		await invoke('ext_set_state', { id: ext.id, enabled: !ext.enabled, autoUpdate: ext.auto_update });
+		toast((ext.enabled ? 'Disabled ' : 'Enabled ') + ext.id);
+		refreshExtView();
+		state.exthostReady = false; startExtHost(true); // restart host to apply
+	};
+	meta.appendChild(toggle);
+	// Auto-update checkbox
+	const au = document.createElement('label');
+	au.className = 'ext-auto';
+	au.innerHTML = `<input type="checkbox" ${ext.auto_update ? 'checked' : ''}> auto-update`;
+	au.querySelector('input').onchange = e => invoke('ext_set_state', { id: ext.id, enabled: ext.enabled, autoUpdate: e.target.checked });
+	meta.appendChild(au);
 	const un = document.createElement('button');
 	un.className = 'ext-btn uninstall';
 	un.textContent = 'Uninstall';
-	un.onclick = async () => { await invoke('ext_uninstall', { id: ext.id }); toast('Uninstalled ' + ext.id); refreshExtView(); startExtHost(); };
+	un.onclick = async () => { if (!(await confirmDialog('Uninstall ' + ext.id + '?'))) return; await invoke('ext_uninstall', { id: ext.id }); toast('Uninstalled ' + ext.id); refreshExtView(); state.exthostReady = false; startExtHost(true); };
 	meta.appendChild(un);
 	for (const th of ext.themes) {
 		const b = document.createElement('button');

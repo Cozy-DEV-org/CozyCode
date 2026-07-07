@@ -683,7 +683,7 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.14.1';
+const APP_VERSION = '0.15.0';
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.
@@ -857,6 +857,10 @@ Object.assign(Settings, {
 			if (last) { try { await invoke('list_dir', { path: last }); await openFolder(last); } catch { localStorage.removeItem('cozyLastFolder'); } }
 		}
 	} catch (e) { console.error(e); }
+
+	// start the extension host on launch so extensions load/activate even before a
+	// folder is opened (so they actually work after a restart, not just show "Installed")
+	try { setTimeout(() => Ext.startExtHost(), 1500); } catch { }
 
 	// check for updates on EVERY launch; toast "up to date" when current
 	try { setTimeout(() => checkForUpdate(null, true, true), 3000); } catch { }

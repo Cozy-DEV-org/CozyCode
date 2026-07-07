@@ -21,8 +21,8 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // set the window/taskbar icon explicitly from the new logo
-            if let Ok(img) = tauri::image::Image::from_bytes(include_bytes!("../icons/cozycode.png")) {
+            // set the window/taskbar icon from the proper multi-size .ico
+            if let Ok(img) = tauri::image::Image::from_bytes(include_bytes!("../icons/cozycode256x256.ico")) {
                 use tauri::Manager;
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.set_icon(img);
@@ -68,6 +68,8 @@ fn main() {
             ext_cmds::ext_install,
             ext_cmds::ext_uninstall,
             ext_cmds::ext_list,
+            ext_cmds::ext_set_state,
+            ext_cmds::ext_disabled_ids,
             ext_cmds::import_vscode_extensions,
             ai_cmds::ai_models,
             git_cmds::git_merge,

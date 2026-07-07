@@ -407,8 +407,13 @@ function activateByEvent(event) {
 	}
 }
 
+let disabledExts = {};
+try { disabledExts = JSON.parse(fs.readFileSync(path.join(extRoot, '.state.json'), 'utf8')); } catch {}
+const isDisabled = id => disabledExts[id] && disabledExts[id].enabled === false;
+
 if (extRoot && fs.existsSync(extRoot)) {
 	for (const dir of fs.readdirSync(extRoot)) {
+		if (dir === '.state.json' || isDisabled(dir)) continue;
 		const base = path.join(extRoot, dir, 'extension');
 		const pkgPath = path.join(base, 'package.json');
 		if (!fs.existsSync(pkgPath)) continue;
