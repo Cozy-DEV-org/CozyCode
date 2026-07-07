@@ -55,6 +55,8 @@ body {
 }
 .menu-item:hover { background: var(--list-sel); color: #fff; }
 .menu-item .keybind { color: var(--fg-dim); font-size: 11px; }
+.menu-item.menu-check { padding-left: 6px; }
+.menu-tick { width: 16px; flex-shrink: 0; font-size: 14px; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 10px; }
 
 #root { flex: 1; display: flex; min-height: 0; }

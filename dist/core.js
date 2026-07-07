@@ -143,9 +143,17 @@ function contextMenu(x, y, items) {
 	for (const it of items) {
 		if (it === '-') { const s = document.createElement('div'); s.className = 'menu-sep'; menu.appendChild(s); continue; }
 		const d = document.createElement('div');
-		d.className = 'menu-item' + (it.disabled ? ' disabled' : '');
-		d.innerHTML = `<span>${esc(it.label)}</span><span class="keybind">${esc(it.key || '')}</span>`;
-		if (!it.disabled) d.onclick = () => { menu.remove(); it.run(); };
+		d.className = 'menu-item' + (it.disabled ? ' disabled' : '') + (it.checkbox ? ' menu-check' : '');
+		const mark = it.checkbox ? `<span class="menu-tick codicon ${it.checked ? 'codicon-check' : ''}"></span>` : '';
+		d.innerHTML = `${mark}<span>${esc(it.label)}</span><span class="keybind">${esc(it.key || '')}</span>`;
+		if (!it.disabled) d.onclick = () => {
+			if (it.checkbox) {
+				// toggle in place, keep the menu open (VSCode-style checkbox menu)
+				it.checked = !it.checked;
+				d.querySelector('.menu-tick').className = 'menu-tick codicon ' + (it.checked ? 'codicon-check' : '');
+				it.run(it.checked);
+			} else { menu.remove(); it.run(); }
+		};
 		menu.appendChild(d);
 	}
 	document.body.appendChild(menu);
@@ -898,18 +906,18 @@ function activityBarMenu(x, y) {
 	const items = [];
 	const builtin = { explorer: 'Explorer', search: 'Search', scm: 'Source Control', extensions: 'Extensions', remote: 'Remote SSH' };
 	for (const [v, label] of Object.entries(builtin)) items.push(toggleItem(v, label));
-	// extension-contributed containers
 	$$('.act-btn[data-extview]').forEach(b => items.push(toggleItem('ext:' + b.dataset.extview, b.title)));
 	contextMenu(x, y, items);
 }
+// checkbox item: checked = visible. Toggling only hides the icon (extension keeps running).
 function toggleItem(key, label) {
 	return {
-		label: (hiddenViews.has(key) ? 'Show ' : 'Hide ') + label,
-		run: () => {
-			hiddenViews.has(key) ? hiddenViews.delete(key) : hiddenViews.add(key);
+		label, checkbox: true, checked: !hiddenViews.has(key),
+		run: (checked) => {
+			checked ? hiddenViews.delete(key) : hiddenViews.add(key);
 			localStorage.setItem('cozyHiddenViews', JSON.stringify([...hiddenViews]));
 			applyHiddenViews();
-			if (hiddenViews.has(key) && currentView === key) switchView('explorer');
+			if (!checked && currentView === key) switchView('explorer');
 		},
 	};
 }

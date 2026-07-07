@@ -37,6 +37,18 @@ class EventEmitter {
 	fire(e) { this._h.forEach(h => { try { h(e); } catch {} }); }
 }
 
+// permissive stubs: unknown APIs resolve to a callable/constructable no-op so
+// extensions don't crash. `permObj` gives a returned object a permissive prototype.
+const UNIVERSAL = new Proxy(function () {}, {
+	get: (_t, p) => (p === 'then' || typeof p === 'symbol') ? undefined : UNIVERSAL,
+	apply: () => UNIVERSAL,
+	construct: () => UNIVERSAL,
+});
+const PERMISSIVE = new Proxy({}, {
+	get: (_t, p) => (p === 'then' || typeof p === 'symbol' || p === '__esModule') ? undefined : UNIVERSAL,
+});
+const permObj = o => Object.assign(Object.create(PERMISSIVE), o);
+
 const completionProviders = []; // { selector, provider }
 const commands = new Map();
 const diagCollections = [];
@@ -170,8 +182,8 @@ const vscode = {
 		showInformationMessage: (m, ...rest) => { send({ event: 'message', params: { type: 'info', text: String(m) } }); return Promise.resolve(undefined); },
 		showWarningMessage: (m) => { send({ event: 'message', params: { type: 'warn', text: String(m) } }); return Promise.resolve(undefined); },
 		showErrorMessage: (m) => { send({ event: 'message', params: { type: 'error', text: String(m) } }); return Promise.resolve(undefined); },
-		createOutputChannel: name => ({ appendLine: () => {}, append: () => {}, show: () => {}, dispose: () => {}, clear: () => {} }),
-		createStatusBarItem: () => ({ show: () => {}, hide: () => {}, dispose: () => {}, text: '', tooltip: '' }),
+		createOutputChannel: name => permObj({ name, appendLine: () => {}, append: () => {}, replace: () => {}, show: () => {}, hide: () => {}, dispose: () => {}, clear: () => {}, info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, trace: () => {}, logLevel: 0, onDidChangeLogLevel: () => new Disposable() }),
+		createStatusBarItem: () => permObj({ show: () => {}, hide: () => {}, dispose: () => {}, text: '', tooltip: '', command: undefined, color: undefined, backgroundColor: undefined }),
 		onDidChangeActiveTextEditor: () => new Disposable(),
 		activeTextEditor: undefined,
 		createTextEditorDecorationType: () => new Disposable(),
@@ -183,7 +195,7 @@ const vscode = {
 		},
 		createTreeView: (viewId, opts) => {
 			if (opts && opts.treeDataProvider) vscode.window.registerTreeDataProvider(viewId, opts.treeDataProvider);
-			return { reveal: async () => {}, dispose: () => treeProviders.delete(viewId), onDidChangeSelection: () => new Disposable(), onDidChangeVisibility: () => new Disposable(), visible: true, message: '', title: viewId };
+			return permObj({ reveal: async () => {}, dispose: () => treeProviders.delete(viewId), onDidChangeSelection: () => new Disposable(), onDidChangeVisibility: () => new Disposable(), onDidExpandElement: () => new Disposable(), onDidCollapseElement: () => new Disposable(), visible: true, message: '', title: viewId, description: '', badge: undefined, selection: [] });
 		},
 		registerWebviewViewProvider: () => new Disposable(),
 		showQuickPick: async (items) => Array.isArray(items) ? (await items)[0] : undefined,
@@ -324,6 +336,22 @@ const vscode = {
 	InlayHint: class {}, SemanticTokensBuilder: class { push() {} build() { return {}; } }, SemanticTokensLegend: class {},
 };
 vscode.Uri.joinPath = (base, ...parts) => vscode.Uri.file(path.join(base.fsPath || String(base), ...parts));
+
+// Wrap the vscode API in a Proxy: any API we haven't implemented returns a
+// permissive universal stub (callable/constructable, any property returns itself)
+// instead of undefined. This is why VSCode extensions can access APIs like
+// NotebookCellOutputItem at load time without crashing — mimic "everything exists".
+// set vscode's PROTOTYPE to the permissive proxy so missing APIs resolve to a stub.
+// esbuild's __toESM copies own props into `__create(getPrototypeOf(mod))`, so the
+// copied module inherits this prototype and missing keys (NotebookCellOutputItem,
+// tests, l10n, ...) resolve to UNIVERSAL instead of undefined -> no load crash.
+Object.setPrototypeOf(vscode, PERMISSIVE);
+// also give each namespace a permissive prototype so missing methods
+// (workspace.onDidCloseTextDocument, window.onDidChangeX, languages.registerY, ...)
+// resolve to a no-op stub instead of throwing "is not a function"
+for (const ns of ['workspace', 'window', 'languages', 'commands', 'env', 'debug', 'tasks', 'extensions', 'scm', 'comments', 'authentication', 'notebooks', 'tests', 'l10n']) {
+	if (vscode[ns] && typeof vscode[ns] === 'object') Object.setPrototypeOf(vscode[ns], PERMISSIVE);
+}
 
 // intercept require('vscode') + stub common deps we don't fully implement so an
 // extension's require() doesn't hard-crash (LSP/nls stay no-ops but activate runs)
