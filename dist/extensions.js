@@ -368,7 +368,11 @@ function containerIcon(b, ct) {
 		invoke('read_file_base64', { path: ct.icon }).then(b64 => {
 			const ext = ct.icon.toLowerCase().split('.').pop();
 			const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'png' ? 'image/png' : 'image/*';
-			b.innerHTML = `<img class="act-ext-icon" src="data:${mime};base64,${b64}">`;
+			// render the extension icon as a CSS MASK filled with currentColor so it
+			// takes the activity bar's own colour (grey / white-on-active) exactly like
+			// the built-in codicons — uniform monochrome UI, no per-extension tinting
+			b.innerHTML = `<span class="act-ext-icon"></span>`;
+			b.querySelector('.act-ext-icon').style.setProperty('--ext-icon', `url("data:${mime};base64,${b64}")`);
 		}).catch(() => { });
 	} else b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
 }
@@ -578,6 +582,7 @@ async function restartExtHost() {
 	state.rpcWaiters.forEach(fn => { try { fn(null); } catch { } }); state.rpcWaiters.clear();
 	state.exthostReady = false; extHostStarting = null;
 	webviewResolved.clear(); webviewFrames.clear(); webviewQueues.clear();
+	hungWebviews.clear(); // give every view a fresh chance on the new host
 	try { await startExtHost(true); } catch { }
 }
 function deliverToWebview(viewId, m) {
@@ -599,13 +604,13 @@ async function renderWebviewView(viewId, container) {
 	// so there is nothing to do. Never destroy/re-resolve on reveal.
 	if (webviewResolved.has(viewId) && container.querySelector('iframe')) return;
 	const msg = m => { container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim);padding:8px">' + m + '</div>'; };
-	if (hungWebviews.has(viewId)) return msg('This view could not be loaded.<br>It may require a running server (e.g. Flutter DevTools).');
+	if (hungWebviews.has(viewId)) return msg('This view could not be loaded.<br>Click the view icon again to retry.');
 	msg('Loading...');
 	let res;
-	try { res = await rpc('resolveWebview', { viewId }, 15000); } catch { res = null; }
+	try { res = await rpc('resolveWebview', { viewId }, 30000); } catch { res = null; }
 	if (res === null) { // timeout: the provider likely froze the host -> recover it
 		hungWebviews.add(viewId);
-		msg('This view could not be loaded (timed out). Restarting extension host...');
+		msg('This view could not be loaded (timed out). Restarting extension host - click the view icon to retry.');
 		restartExtHost();
 		return;
 	}
@@ -684,10 +689,17 @@ async function startExtHost(force = false) {
 		listen('exthost-exit', () => { state.exthostReady = false; });
 	}
 	extHostStarting = invoke('exthost_start', { extDir: '' })
-		.then(() => { state.exthostReady = true; })
+		.then(() => { state.exthostReady = true; notifyWorkspace(); })
 		.catch(() => { state.exthostReady = false; /* Node missing -> word-based only */ })
 		.finally(() => { extHostStarting = null; });
 	return extHostStarting;
+}
+
+// tell the host which folder is open: publishes workspaceFolders + fires
+// workspaceContains:* activation (called on host start and every folder open)
+function notifyWorkspace() {
+	if (!state.exthostReady) return;
+	invoke('exthost_send', { line: JSON.stringify({ method: 'setWorkspace', params: { root: state.root || '' } }) }).catch(() => { });
 }
 
 function onExtLine(line) {
@@ -709,6 +721,11 @@ function onExtLine(line) {
 		if (active) toast(`Extension host: ${active} extension(s) active`, 2500);
 	}
 	else if (msg.event === 'log') cozyLog('exthost', msg.params);
+	// extension asked for interactive UI (quick pick / input / message buttons /
+	// file dialogs) — show the real workbench UI and send the answer back
+	else if (msg.event === 'uiRequest') handleUiRequest(msg.params);
+	// extension opened a webview PANEL (createWebviewPanel) -> editor tab
+	else if (msg.event === 'webviewPanel') openExtPanelTab(msg.params);
 	// extension setContext -> re-evaluate when-clauses -> re-place containers
 	else if (msg.event === 'contextKeys') { contextKeys = msg.params || {}; placeContainers(); scheduleWelcomeRefresh(); }
 	else if (msg.event === 'configStore') { extConfig = msg.params || {}; placeContainers(); scheduleWelcomeRefresh(); }
@@ -726,7 +743,117 @@ function onExtLine(line) {
 	}
 }
 
-function rpc(method, params, timeout = 4000) {
+/* ---------- webview panels (createWebviewPanel) as editor tabs ---------- */
+function openExtPanelTab(p) {
+	bindWebview();
+	openUiTab('extpanel:' + p.panelId, p.title || 'Extension', box => {
+		box.innerHTML = '';
+		const frame = document.createElement('iframe');
+		frame.className = 'ext-webview';
+		frame.style.cssText = 'width:100%;height:100%;border:none;background:#1e1e1e;display:block';
+		frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads');
+		frame.dataset.ready = ''; frame.dataset.file = p.file;
+		frame.addEventListener('load', () => { frame.dataset.ready = '1'; flushWebviewQueue(p.panelId); });
+		frame.src = toAssetUrl(p.file);
+		box.appendChild(frame);
+		webviewFrames.set(p.panelId, frame);
+	});
+}
+
+/* ---------- interactive UI bridge (exthost -> workbench -> user -> back) ---------- */
+async function handleUiRequest(p) {
+	let value;
+	try {
+		if (p.kind === 'quickPick') {
+			value = await new Promise(resolve => {
+				let answered = false;
+				const done = v => { if (!answered) { answered = true; resolve(v); } };
+				showPalette(p.items.map((it, i) => ({ label: it.label, detail: it.description || it.detail || '', run: () => done(p.canPickMany ? [i] : i) })), p.placeholder || 'Select...');
+				// closing the palette without choosing = cancel
+				const watch = setInterval(() => { if ($('#palette').classList.contains('hidden')) { clearInterval(watch); setTimeout(() => done(undefined), 50); } }, 200);
+			});
+		} else if (p.kind === 'input') {
+			const v = await nativePrompt(p.prompt || 'Input', p.value || '', p.placeholder || '');
+			value = v === null ? undefined : v;
+		} else if (p.kind === 'message') {
+			// modal -> center dialog; otherwise a VSCode-style notification toast
+			value = p.modal ? await choiceDialog(p.text, p.detail, p.buttons, p.type)
+				: await notifyChoice(p.type, p.text, p.detail, p.buttons);
+		} else if (p.kind === 'openDialog') {
+			const r = await window.__TAURI__.dialog.open({ directory: !!p.directory, multiple: !!p.multiple, title: p.title || undefined });
+			value = r == null ? undefined : (Array.isArray(r) ? r : [r]);
+		} else if (p.kind === 'saveDialog') {
+			value = await window.__TAURI__.dialog.save({ title: p.title || undefined }) || undefined;
+		}
+	} catch { value = undefined; }
+	invoke('exthost_send', { line: JSON.stringify({ method: 'uiResponse', params: { id: p.id, value } }) }).catch(() => { });
+}
+
+// modal with arbitrary buttons; resolves the clicked index or undefined on dismiss
+// modal message dialog (only for showXMessage(..., {modal:true}, ...))
+function choiceDialog(text, detail, buttons, type) {
+	return new Promise(resolve => {
+		const overlay = document.createElement('div');
+		overlay.className = 'modal-overlay';
+		overlay.innerHTML = `<div class="modal"><div class="modal-title">${esc(text)}</div>` +
+			(detail ? `<div class="modal-msg">${esc(detail)}</div>` : '') +
+			`<div class="modal-btns"></div></div>`;
+		const btns = overlay.querySelector('.modal-btns');
+		const done = v => { overlay.remove(); document.removeEventListener('keydown', onKey, true); resolve(v); };
+		buttons.forEach((b, i) => {
+			const el = document.createElement('button');
+			el.className = 'modal-btn' + (i === 0 ? ' primary' : '');
+			el.textContent = b;
+			el.title = b;
+			el.onclick = () => done(i);
+			btns.appendChild(el);
+		});
+		const cancel = document.createElement('button');
+		cancel.className = 'modal-btn';
+		cancel.textContent = buttons.length ? 'Cancel' : 'OK';
+		cancel.onclick = () => done(undefined);
+		btns.appendChild(cancel);
+		const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); done(undefined); } };
+		document.addEventListener('keydown', onKey, true);
+		overlay.addEventListener('mousedown', e => { if (e.target === overlay) done(undefined); });
+		document.body.appendChild(overlay);
+	});
+}
+
+// VSCode-style notification (bottom-right toast with action links); resolves the
+// clicked button index, or undefined when dismissed / auto-hidden
+function notifyChoice(type, text, detail, buttons) {
+	return new Promise(resolve => {
+		let host = $('#notifications');
+		if (!host) { host = document.createElement('div'); host.id = 'notifications'; document.body.appendChild(host); }
+		const n = document.createElement('div');
+		n.className = 'notif notif-' + (type || 'info');
+		const icon = type === 'error' ? 'error' : type === 'warn' ? 'warning' : 'info';
+		let settled = false;
+		const done = v => { if (settled) return; settled = true; clearTimeout(timer); n.classList.add('leaving'); setTimeout(() => n.remove(), 180); resolve(v); };
+		const head = document.createElement('div');
+		head.className = 'notif-head';
+		head.innerHTML = `<span class="codicon codicon-${icon} notif-icon"></span><span class="notif-text">${esc(text)}${detail ? '<br><span class="notif-detail">' + esc(detail) + '</span>' : ''}</span>` +
+			`<button class="notif-close" title="Clear"><span class="codicon codicon-close"></span></button>`;
+		head.querySelector('.notif-close').onclick = () => done(undefined);
+		n.appendChild(head);
+		if (buttons.length) {
+			const row = document.createElement('div');
+			row.className = 'notif-actions';
+			buttons.forEach((b, i) => { const el = document.createElement('button'); el.className = 'notif-btn' + (i === 0 ? ' primary' : ''); el.textContent = b; el.onclick = () => done(i); row.appendChild(el); });
+			n.appendChild(row);
+		}
+		host.appendChild(n);
+		// auto-dismiss info/warn without pending choice after 12s (like VSCode)
+		const timer = setTimeout(() => done(undefined), buttons.length ? 20000 : 8000);
+	});
+}
+
+async function rpc(method, params, timeout = 4000) {
+	// wait for the host instead of failing instantly — clicking a view right after
+	// launch used to produce a bogus "timed out" before the host even started
+	if (!state.exthostReady) { try { await startExtHost(); } catch { } }
+	if (!state.exthostReady && extHostStarting) { try { await extHostStarting; } catch { } }
 	return new Promise(resolve => {
 		if (!state.exthostReady) return resolve(null);
 		const id = state.rpcId++;
@@ -821,6 +948,6 @@ function activateLanguage(lang) {
 	invoke('exthost_send', { line: JSON.stringify({ method: 'activateEvent', params: { event: 'onLanguage:' + lang } }) }).catch(() => { });
 }
 
-Object.assign(Ext, { renderView, startExtHost, provideCompletions, RECOMMENDED, applyContributions, contributedCommands, activateLanguage, runExtCommand: (cmd, ...args) => rpc('executeCommand', { command: cmd, args }, 8000) });
+Object.assign(Ext, { renderView, startExtHost, notifyWorkspace, provideCompletions, RECOMMENDED, applyContributions, contributedCommands, activateLanguage, runExtCommand: (cmd, ...args) => rpc('executeCommand', { command: cmd, args }, 8000) });
 window.searchExtensions = searchExtensions;
 $('#ext-input').addEventListener('keydown', e => { if (e.key === 'Enter') searchExtensions(); });

@@ -44,6 +44,7 @@ fn main() {
             fs_cmds::create_dir,
             fs_cmds::rename_path,
             fs_cmds::delete_path,
+            fs_cmds::md_graph,
             search_cmds::search_text,
             search_cmds::search_replace,
             search_cmds::list_files,

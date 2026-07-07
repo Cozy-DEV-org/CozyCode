@@ -1,25 +1,59 @@
 <div align="center">
   <img src="src-tauri/icons/cozycode.png" width="96" alt="CozyCode">
   <h1>CozyCode</h1>
-  <p><b>A cozy, lightweight code editor.</b> Rust + Tauri rework of VS Code (Code - OSS).</p>
-  <p>Feature parity with VS Code, a fraction of the RAM, and <b>zero telemetry</b>.</p>
+  <p><b>The cozy, lightweight editor built for vibe coding.</b></p>
+  <p>A Rust + Tauri rework of VS Code — full workbench, a fraction of the RAM, <b>zero telemetry</b>, and an <b>AI-native workflow with Claude Code built in</b>.</p>
 </div>
 
-## Why
+---
 
-VS Code is great but heavy — Electron plus a handful of Node processes idle around **1–1.5 GB**. CozyCode keeps the parts developers love (the Monaco editor, the workbench UX, Source Control, extensions) but runs the backend in Rust on Tauri (WebView2), idling around **~350 MB** with a **~10 MB** binary.
+## What makes CozyCode different
 
-## Features
+CozyCode keeps everything you love about VS Code (the Monaco editor, the workbench, Source Control, real extensions) but runs the backend in **Rust on Tauri (WebView2)** instead of Electron. The result:
 
-- **Editor** — Monaco (same core as VS Code), tabs with preview/pin, multi-language syntax, minimap, zoom (Ctrl +/−/0)
-- **Explorer** — file tree with [vscode-icons](https://github.com/vscode-icons/vscode-icons), ripgrep search, quick open (Ctrl+P)
-- **Source Control** — multi-repo, REPOSITORIES / CHANGES / GRAPH layout, diff, stage/discard, commit, merge, push/pull, Pull Requests, **AI-generated commit messages**
+| | VS Code | CozyCode |
+|---|---|---|
+| Idle RAM | ~1–1.5 GB | **~350 MB** |
+| Binary size | ~350 MB | **~10 MB** |
+| Telemetry | on by default | **none, ever** |
+| AI workflow | extension | **built in** |
+
+Then it goes further — purpose-built for **vibe coding**: staying in flow with an AI pair right in the editor, and reading AI-generated Markdown the way you'd read a knowledge base.
+
+---
+
+## Vibe coding, first-class
+
+### Claude Code, in the editor
+CozyCode ships a dedicated **AI panel** on the right. Two modes, one click apart:
+
+- **AI Chat** — talk to any model over the Chat API. `@` to mention files, highlight code and drop it into chat, attach files, paste images. Bring your own key: **Anthropic · OpenAI · OpenRouter · z.ai · Groq · Ollama**.
+- **Claude Code CLI** — run the real [Claude Code](https://www.anthropic.com/claude-code) agent right inside CozyCode (you install the CLI once, CozyCode drives it). Multi-session, restore, kill-per-session.
+
+> The whole extension surface an AI agent needs — quick picks, input boxes, notifications, webview panels — is wired through a real UI bridge, so agent extensions (including Claude's own VS Code integration) actually work.
+
+### AI-native Markdown
+AI writes a lot of Markdown — plans, notes, docs. CozyCode makes it a pleasure to read:
+
+- **📖 Markdown Preview** — built in (no extension). Right-click any `.md` → **Preview Markdown** (or `Ctrl+Shift+V`). Themed rendering: headings, code blocks, tables, blockquotes, checkboxes, images. **`[[wikilinks]]`** are clickable.
+- **🕸️ Graph View (Obsidian-style)** — see how your notes and docs connect. CozyCode scans the workspace for `.md` files, extracts `[[wikilinks]]` and `[](file.md)` links, and draws an interactive force-directed graph. Hover to highlight neighbours, click a node to open it, drag / pan / zoom. Perfect for navigating an AI-built knowledge base.
+
+---
+
+## Everything else (full VS Code parity)
+
+- **Editor** — Monaco (the same core as VS Code), preview/pinned tabs, syntax for every language, minimap, zoom (`Ctrl +/−/0`)
+- **Explorer** — file tree with [vscode-icons](https://github.com/vscode-icons/vscode-icons), ripgrep search, Quick Open (`Ctrl+P`), a titlebar command center
+- **Source Control** — multi-repo, REPOSITORIES / CHANGES / GRAPH, diff, stage / discard, commit, merge, push / pull, Pull Requests, and **AI-generated commit messages**
+- **Extensions** — install from [Open VSX](https://open-vsx.org) and run them on a built-in extension host: tree views, **webview views & panels**, `viewsWelcome`, commands, completions, diagnostics, LSP. Containers land in their real spot — **left activity bar, right secondary side bar, or bottom panel** — with monochrome icons that match the theme.
+- **Layout** — resizable sidebars & panel that track the cursor exactly, titlebar toggles for Left / Panel / Right (`Ctrl+Alt+B`), custom titlebar + menus
 - **Terminal** — auto-detected shells (pwsh, cmd, Git Bash, WSL, zsh/bash), split, drag-reorder, per-terminal kill
-- **Extensions** — install from [Open VSX](https://open-vsx.org), color themes, a lightweight extension host (completions, diagnostics)
-- **Remote** — built-in SSH (SFTP edit, port forwarding), public tunnels (cloudflared/ngrok/tailscale)
-- **AI** — Claude panel (Chat API + Claude Code CLI); commit-message generation across Anthropic / OpenAI / OpenRouter / z.ai / Groq / Ollama
-- **More** — Problems panel, Ports, Settings & Keybindings UI, GitHub OAuth device-flow sign-in, media viewers (image / video / PDF / CSV / XLSX), Save-with-Encoding, hot-exit (unsaved files survive restart)
-- **No telemetry** — nothing leaves your machine
+- **Remote** — built-in SSH (SFTP edit, port forwarding) and public tunnels (cloudflared / ngrok / tailscale)
+- **Media** — image / video / PDF / CSV / XLSX viewers, Save-with-Encoding, hot-exit (unsaved files survive a restart)
+- **More** — Problems panel, Ports, Settings & Keybindings UI, GitHub sign-in, self-update from within the app (Help → About → Check for Update)
+- **Privacy** — no telemetry, no phone-home. Your keys and settings stay in your local profile, never in the build.
+
+---
 
 ## Build from source
 
@@ -27,30 +61,28 @@ Requires the [Rust toolchain](https://rustup.rs) and the [Tauri prerequisites](h
 
 ```sh
 cd src-tauri
-cargo build --release
+cargo build --release          # -> target/release/cozycode.exe
 ```
 
 ### Installers / cross-platform
 
-CozyCode is a Tauri app and builds for **Windows, macOS, and Linux**. Install the Tauri CLI (`cargo install tauri-cli --version "^2"`), then:
+CozyCode builds for **Windows, macOS, and Linux**. Install the Tauri CLI (`cargo install tauri-cli --version "^2"`), then:
 
 ```sh
 cargo tauri build
 ```
 
-- **Windows** → `.exe` (NSIS) + `.msi`, in `src-tauri/target/release/bundle/`
-- **macOS** → `.dmg` + `.app` (run on macOS; universal via `--target universal-apple-darwin`)
+- **Windows** → `.exe` (NSIS) + `.msi`
+- **macOS** → `.dmg` + `.app` (universal via `--target universal-apple-darwin`)
 - **Linux** → `.deb` + `.AppImage` + `.rpm`
 
-On macOS/Linux set `bundle.targets` in `tauri.conf.json` to `"all"` (or omit) so the platform's default bundlers are used — the committed config lists Windows bundlers (`nsis`, `msi`). Self-update signing uses the key referenced by `TAURI_SIGNING_PRIVATE_KEY`.
-
-Dev run: `cargo run` (from `src-tauri/`).
+On macOS/Linux set `bundle.targets` in `tauri.conf.json` to `"all"`; the committed config lists Windows bundlers. Self-update signing uses the key in `TAURI_SIGNING_PRIVATE_KEY`. Dev run: `cargo run` from `src-tauri/`.
 
 ## Layout
 
-- `src-tauri/` — Rust backend + Tauri config (fs, git, pty, ssh, extension host, AI, tunnels)
+- `src-tauri/` — Rust backend + Tauri config (fs, git, pty, ssh, extension host, AI, tunnels, Markdown graph)
 - `dist/` — frontend (Monaco workbench UI, no build step)
 
 ## License
 
-MIT. Based on [Code - OSS](https://github.com/microsoft/vscode) by Microsoft. Not affiliated with or endorsed by Microsoft.
+MIT. Based on [Code - OSS](https://github.com/microsoft/vscode) by Microsoft. Not affiliated with or endorsed by Microsoft. Claude Code is a product of Anthropic; CozyCode integrates the CLI you install, and is not affiliated with Anthropic.

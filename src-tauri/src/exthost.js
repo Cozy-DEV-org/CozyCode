@@ -78,6 +78,36 @@ const permObj = o => Object.assign(Object.create(PERMISSIVE), o);
 const completionProviders = []; // { selector, provider }
 const commands = new Map();
 const contextKeys = {}; // set via executeCommand('setContext', k, v); drives when-clauses
+
+// interactive UI bridge: exthost asks the workbench to show a picker/input/dialog
+// and awaits the user's answer (uiResponse RPC). VSCode does the same over its
+// extension-host protocol — a no-op answer here makes extension flows dead-end.
+let _uiSeq = 1;
+const uiWaiters = new Map();
+function uiRequest(kind, params) {
+	return new Promise(resolve => {
+		const id = 'ui' + (_uiSeq++);
+		uiWaiters.set(id, resolve);
+		send({ event: 'uiRequest', params: Object.assign({ id, kind }, params) });
+		setTimeout(() => { if (uiWaiters.has(id)) { uiWaiters.delete(id); resolve(undefined); } }, 180000);
+	});
+}
+// info/warn/error with action buttons -> modal with those buttons; without -> toast
+async function uiMessage(type, m, rest) {
+	rest = rest || [];
+	// signature: showXMessage(message, options?, ...items). options is an object
+	// WITHOUT a `title` (MessageItems have title); it carries { modal, detail }.
+	let modal = false, detail = '';
+	if (rest.length && rest[0] && typeof rest[0] === 'object' && !('title' in rest[0])) {
+		modal = !!rest[0].modal; detail = rest[0].detail || ''; rest = rest.slice(1);
+	}
+	const items = rest.filter(x => x != null);
+	const buttons = items.map(x => typeof x === 'object' ? String(x.title) : String(x));
+	// no buttons + not modal -> plain notification toast (VSCode fires-and-forgets)
+	if (!buttons.length && !modal) { send({ event: 'message', params: { type, text: String(m) } }); return undefined; }
+	const idx = await uiRequest('message', { type, text: String(m), detail, buttons, modal });
+	return (idx == null || idx < 0) ? undefined : items[idx];
+}
 const configStore = {}; // setting key -> default value, from every ext's contributes.configuration
 
 // a real appRoot with product.json — extensions read `${env.appRoot}/product.json`
@@ -338,9 +368,9 @@ const vscode = {
 		getCommands: async () => [...commands.keys()],
 	},
 	window: {
-		showInformationMessage: (m, ...rest) => { send({ event: 'message', params: { type: 'info', text: String(m) } }); return Promise.resolve(undefined); },
-		showWarningMessage: (m) => { send({ event: 'message', params: { type: 'warn', text: String(m) } }); return Promise.resolve(undefined); },
-		showErrorMessage: (m) => { send({ event: 'message', params: { type: 'error', text: String(m) } }); return Promise.resolve(undefined); },
+		showInformationMessage: (m, ...rest) => uiMessage('info', m, rest),
+		showWarningMessage: (m, ...rest) => uiMessage('warn', m, rest),
+		showErrorMessage: (m, ...rest) => uiMessage('error', m, rest),
 		// forward extension output channels to the app's Output console — extensions
 		// log their own diagnostics there (e.g. Claude Code logs every webview message)
 		createOutputChannel: name => { const fwd = lvl => (...a) => log(`[${name}]${lvl} ` + a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ').slice(0, 400)); return permObj({ name, appendLine: fwd(''), append: () => {}, replace: () => {}, show: () => {}, hide: () => {}, dispose: () => {}, clear: () => {}, info: fwd(''), warn: fwd(' warn:'), error: fwd(' error:'), debug: () => {}, trace: () => {}, logLevel: 3, onDidChangeLogLevel: () => new Disposable() }); },
@@ -359,16 +389,66 @@ const vscode = {
 			return permObj({ reveal: async () => {}, dispose: () => treeProviders.delete(viewId), onDidChangeSelection: () => new Disposable(), onDidChangeVisibility: () => new Disposable(), onDidExpandElement: () => new Disposable(), onDidCollapseElement: () => new Disposable(), visible: true, message: '', title: viewId, description: '', badge: undefined, selection: [] });
 		},
 		registerWebviewViewProvider: (viewId, provider) => { webviewProviders.set(viewId, provider); send({ event: 'webviewReady', params: { viewId } }); return new Disposable(() => webviewProviders.delete(viewId)); },
-		showQuickPick: async (items) => Array.isArray(items) ? (await items)[0] : undefined,
-		showInputBox: async () => undefined,
-		showOpenDialog: async () => undefined, showSaveDialog: async () => undefined,
-		withProgress: async (opts, task) => task({ report: () => {} }, { isCancellationRequested: false, onCancellationRequested: () => new Disposable() }),
+		// real interactive UI, bridged to the workbench (palette / modal / dialogs) —
+		// no-op stubs here made every extension button look dead
+		showQuickPick: async (items, opts) => {
+			items = await Promise.resolve(items);
+			if (!Array.isArray(items) || !items.length) return undefined;
+			const labels = items.map(x => typeof x === 'string' ? { label: x } : { label: String(x.label || ''), description: x.description ? String(x.description) : '', detail: x.detail ? String(x.detail) : '' });
+			const idx = await uiRequest('quickPick', { items: labels, placeholder: (opts && opts.placeHolder) || '', canPickMany: !!(opts && opts.canPickMany) });
+			if (idx === undefined || idx === null) return undefined;
+			return Array.isArray(idx) ? idx.map(i => items[i]) : items[idx];
+		},
+		showInputBox: async (opts) => {
+			const v = await uiRequest('input', { prompt: (opts && (opts.prompt || opts.title)) || 'Input', value: (opts && opts.value) || '', placeholder: (opts && opts.placeHolder) || '' });
+			return v == null ? undefined : String(v);
+		},
+		showOpenDialog: async (opts) => {
+			const r = await uiRequest('openDialog', { directory: !!(opts && opts.canSelectFolders), multiple: !!(opts && opts.canSelectMany), title: (opts && opts.title) || '' });
+			return Array.isArray(r) && r.length ? r.map(p => Uri.file(p)) : undefined;
+		},
+		showSaveDialog: async (opts) => {
+			const r = await uiRequest('saveDialog', { title: (opts && opts.title) || '' });
+			return r ? Uri.file(r) : undefined;
+		},
+		withProgress: async (opts, task) => {
+			if (opts && opts.title) send({ event: 'message', params: { type: 'info', text: String(opts.title) } });
+			return task({ report: () => {} }, { isCancellationRequested: false, onCancellationRequested: () => new Disposable() });
+		},
 		setStatusBarMessage: () => new Disposable(),
 		registerUriHandler: () => new Disposable(),
 		registerCustomEditorProvider: () => new Disposable(),
 		registerTerminalLinkProvider: () => new Disposable(),
 		registerFileDecorationProvider: () => new Disposable(),
-		createWebviewPanel: () => ({ webview: { html: '', options: {}, onDidReceiveMessage: () => new Disposable(), postMessage: async () => true, asWebviewUri: u => u, cspSource: '' }, onDidDispose: () => new Disposable(), onDidChangeViewState: () => new Disposable(), reveal: () => {}, dispose: () => {}, visible: true, active: true, title: '' }),
+		// real webview panels: rendered as an editor tab in the workbench (MongoDB's
+		// Add Connection page, GitLens welcome, etc. all arrive through here)
+		createWebviewPanel: (viewType, title, _showOpts, options) => {
+			const panelId = ('panel.' + viewType + '.' + (_uiSeq++));
+			let htmlValue = '', filePath = '';
+			const disposeListeners = [];
+			webviews.set(panelId, { onMsg: null, pendingIn: [] });
+			const tabTitle = () => String(title || viewType);
+			const webview = {
+				options: options || {}, cspSource: "data: https: 'unsafe-inline' 'unsafe-eval'",
+				get html() { return htmlValue; },
+				set html(v) { htmlValue = v; filePath = writeWebviewFile(panelId, v); send({ event: 'webviewPanel', params: { panelId, title: tabTitle(), file: filePath } }); },
+				asWebviewUri: (uri) => assetUrl(uri && uri.fsPath ? uri.fsPath : String(uri)),
+				postMessage: async (m) => { send({ event: 'webviewToView', params: { viewId: panelId, msg: m } }); return true; },
+				onDidReceiveMessage: (fn) => {
+					const w = webviews.get(panelId);
+					if (w) { w.onMsg = fn; const q = w.pendingIn || []; w.pendingIn = []; for (const m of q) { try { fn(m); } catch {} } }
+					return new Disposable();
+				},
+			};
+			return permObj({
+				viewType, webview, active: true, visible: true, viewColumn: 1,
+				get title() { return String(title); }, set title(t) { title = t; },
+				reveal: () => { if (filePath) send({ event: 'webviewPanel', params: { panelId, title: tabTitle(), file: filePath } }); },
+				onDidDispose: (fn) => { disposeListeners.push(fn); return new Disposable(); },
+				onDidChangeViewState: () => new Disposable(),
+				dispose: () => { webviews.delete(panelId); for (const f of disposeListeners) { try { f(); } catch {} } },
+			});
+		},
 		createQuickPick: () => ({ items: [], onDidChangeValue: () => new Disposable(), onDidAccept: () => new Disposable(), onDidHide: () => new Disposable(), onDidChangeSelection: () => new Disposable(), show: () => {}, hide: () => {}, dispose: () => {}, value: '', placeholder: '', busy: false }),
 		createInputBox: () => ({ onDidAccept: () => new Disposable(), onDidHide: () => new Disposable(), onDidChangeValue: () => new Disposable(), show: () => {}, hide: () => {}, dispose: () => {}, value: '' }),
 		createTerminal: () => ({ sendText: () => {}, show: () => {}, hide: () => {}, dispose: () => {}, name: '', processId: Promise.resolve(undefined) }),
@@ -414,15 +494,24 @@ const vscode = {
 		workspaceFolders: [],
 		textDocuments: [],
 		name: undefined, workspaceFile: undefined,
-		fs: { readFile: async u => fs.readFileSync(u.fsPath || String(u)), writeFile: async () => {}, stat: async () => ({ type: 1, size: 0, ctime: 0, mtime: 0 }), readDirectory: async () => [], createDirectory: async () => {}, delete: async () => {}, rename: async () => {}, copy: async () => {} },
+		fs: {
+			readFile: async u => fs.readFileSync(u.fsPath || String(u)),
+			writeFile: async (u, data) => fs.writeFileSync(u.fsPath || String(u), Buffer.from(data)),
+			stat: async u => { const s = fs.statSync(u.fsPath || String(u)); return { type: s.isDirectory() ? 2 : 1, size: s.size, ctime: s.ctimeMs, mtime: s.mtimeMs }; },
+			readDirectory: async u => fs.readdirSync(u.fsPath || String(u), { withFileTypes: true }).map(d => [d.name, d.isDirectory() ? 2 : 1]),
+			createDirectory: async u => fs.mkdirSync(u.fsPath || String(u), { recursive: true }),
+			delete: async u => fs.rmSync(u.fsPath || String(u), { recursive: true, force: true }),
+			rename: async (a, b) => fs.renameSync(a.fsPath || String(a), b.fsPath || String(b)),
+			copy: async (a, b) => fs.copyFileSync(a.fsPath || String(a), b.fsPath || String(b)),
+		},
 		openTextDocument: async () => { throw new Error('not supported'); },
 		findFiles: async () => [],
 		saveAll: async () => true,
 		applyEdit: async () => true,
 		createFileSystemWatcher: () => ({ onDidCreate: () => new Disposable(), onDidChange: () => new Disposable(), onDidDelete: () => new Disposable(), dispose: () => {} }),
-		getWorkspaceFolder: () => undefined,
+		getWorkspaceFolder: (u) => vscode.workspace.workspaceFolders[0],
 		asRelativePath: p => (p && p.fsPath) || String(p),
-		onDidChangeWorkspaceFolders: () => new Disposable(),
+		onDidChangeWorkspaceFolders: h => { workspaceFolderListeners.push(h); return new Disposable(); },
 		onDidCreateFiles: () => new Disposable(), onDidDeleteFiles: () => new Disposable(), onDidRenameFiles: () => new Disposable(),
 		registerTextDocumentContentProvider: () => new Disposable(),
 		registerFileSystemProvider: () => new Disposable(),
@@ -676,9 +765,13 @@ function activateExt(dir) {
 	if (!rec || rec.activated) return;
 	rec.activated = true;
 	try {
+		if (process.env.COZY_TRACE) process.stderr.write('ACTIVATE ' + dir + '\n');
 		const mod = require(path.join(rec.base, rec.pkg.main));
+		if (process.env.COZY_TRACE) process.stderr.write('LOADED ' + dir + '\n');
 		if (typeof mod.activate === 'function') {
-			Promise.resolve(mod.activate(makeContext(rec.base, rec.pkg))).then(
+			const _p = mod.activate(makeContext(rec.base, rec.pkg));
+			if (process.env.COZY_TRACE) process.stderr.write('SYNC-OK ' + dir + '\n');
+			Promise.resolve(_p).then(
 				(api) => { rec.exports = api === undefined ? {} : api; setStatus(dir, 'activated'); }, // exports for dependent extensions (getExtension().exports)
 				e => setStatus(dir, 'activate failed: ' + String(e && e.message).slice(0, 260)),
 			);
@@ -694,13 +787,70 @@ function activateByEvent(event) {
 	}
 }
 
+// workspaceContains:<glob> activation — VSCode scans the opened folder for the
+// pattern and activates matching extensions. Shallow BFS (depth 3, capped) covers
+// the real-world patterns (pubspec.yaml, */pom.xml, **/*.csproj).
+const workspaceFolderListeners = [];
+function setWorkspaceRoot(root) {
+	const folders = root ? [{ uri: Uri.file(root), name: path.basename(root), index: 0 }] : [];
+	vscode.workspace.workspaceFolders = folders;
+	vscode.workspace.rootPath = root || undefined;
+	vscode.workspace.name = root ? path.basename(root) : undefined;
+	for (const h of workspaceFolderListeners) { try { h({ added: folders, removed: [] }); } catch {} }
+	if (!root) return;
+	// ONE shallow scan of the folder, then match every extension's patterns against
+	// it — a scan per pattern per extension blocked the event loop for 20s+ on
+	// workspaces with a Rust target/ dir, freezing every pending RPC.
+	const names = [];
+	const queue = [[root, 0]];
+	let seen = 0;
+	while (queue.length && seen < 4000) {
+		const [dir, depth] = queue.shift();
+		let entries;
+		try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+		for (const e of entries) {
+			if (++seen > 4000) break;
+			names.push(e.name);
+			if (e.isDirectory() && depth < 2 && e.name !== 'node_modules' && e.name !== 'target' && e.name[0] !== '.') queue.push([path.join(dir, e.name), depth + 1]);
+		}
+	}
+	const nameSet = new Set(names);
+	const toActivate = [];
+	for (const [dir, rec] of extIndex) {
+		if (rec.activated) continue;
+		for (const ev of rec.events) {
+			if (!ev.startsWith('workspaceContains:')) continue;
+			const pat = ev.slice(18).replace(/^\*\*\//, '').replace(/^(\*\/)+/, '');
+			let hit;
+			if (pat.includes('*')) {
+				const rx = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/\\\\]*') + '$', 'i');
+				hit = names.some(n => rx.test(n));
+			} else hit = nameSet.has(pat);
+			if (hit) { toActivate.push(dir); break; }
+		}
+	}
+	// activate one per tick: each require() of a big bundle blocks the loop for a
+	// while, and doing them back-to-back froze every pending RPC for 20s+
+	let ai = 0;
+	const step = () => { if (ai >= toActivate.length) return; try { activateExt(toActivate[ai++]); } catch {} setImmediate(step); };
+	setImmediate(step);
+}
+
 let disabledExts = {};
 try { disabledExts = JSON.parse(fs.readFileSync(path.join(extRoot, '.state.json'), 'utf8')); } catch {}
 const isDisabled = id => disabledExts[id] && disabledExts[id].enabled === false;
 
+// platform-incompatible: Microsoft's remote-* extensions are proprietary and only
+// function inside official VS Code (WSL even says so at runtime); remote-containers
+// additionally busy-loops against our shim. Every fork (VSCodium, Cursor) blocks
+// these — CozyCode ships its own SSH remote instead.
+const UNSUPPORTED = ['ms-vscode-remote.', 'ms-vscode.remote-', 'github.codespaces', 'ms-vsliveshare.'];
+const isUnsupported = id => UNSUPPORTED.some(p => id.toLowerCase().startsWith(p));
+
 if (extRoot && fs.existsSync(extRoot)) {
 	for (const dir of fs.readdirSync(extRoot)) {
 		if (dir.startsWith('.') || isDisabled(dir)) continue; // skip .state.json + partial/temp install dirs
+		if (isUnsupported(dir)) { loaded.push({ id: dir, status: 'unsupported (requires VS Code remote infrastructure)' }); continue; }
 		const base = path.join(extRoot, dir, 'extension');
 		const pkgPath = path.join(base, 'package.json');
 		if (!fs.existsSync(pkgPath)) continue;
@@ -785,6 +935,19 @@ rl.on('line', async line => {
 	try { msg = JSON.parse(line); } catch { return; }
 	if (msg.method === 'shutdown') process.exit(0);
 	if (msg.method === 'activateEvent') { activateByEvent(msg.params.event); if (msg.id) send({ id: msg.id, result: true }); return; }
+	// answer to a uiRequest (quick pick selection, input text, dialog result)
+	if (msg.method === 'uiResponse') {
+		const w = uiWaiters.get(msg.params.id);
+		if (w) { uiWaiters.delete(msg.params.id); w(msg.params.value); }
+		return;
+	}
+	// workspace opened/changed in the workbench: publish real workspaceFolders and
+	// fire workspaceContains:* activation (VSCode scans the folder for the patterns)
+	if (msg.method === 'setWorkspace') {
+		setWorkspaceRoot(msg.params.root || '');
+		if (msg.id) send({ id: msg.id, result: true });
+		return;
+	}
 	if (msg.method === 'completions') {
 		const { languageId, uri, text, line, character } = msg.params;
 		activateByEvent('onLanguage:' + languageId);
@@ -864,7 +1027,8 @@ rl.on('line', async line => {
 		// respond as soon as html is first set (VSCode paints immediately); the rest of
 		// resolveWebviewView often awaits slow init (analysis server, DevTools) that may
 		// never settle without a project open, so we must not block the RPC on it.
-		const respond = (error) => { if (responded) return; responded = true; send({ id: msg.id, result: { file: filePath, error } }); };
+		const respond = (error) => { if (responded) return; responded = true; log(`webview resolve done ${viewId}${error ? ' err: ' + error : ''}`); send({ id: msg.id, result: { file: filePath, error } }); };
+		log('webview resolve start ' + viewId);
 		const webview = {
 			options: {}, cspSource: "data: https: 'unsafe-inline' 'unsafe-eval'",
 			get html() { return htmlValue; },

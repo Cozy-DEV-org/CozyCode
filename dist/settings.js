@@ -118,6 +118,7 @@ const DEFAULT_KEYS = {
 	'workbench.action.zoomOut': 'Ctrl+-',
 	'workbench.action.zoomReset': 'Ctrl+0',
 	'workbench.action.run': 'F5',
+	'markdown.showPreview': 'Ctrl+Shift+V',
 };
 function loadKeys() { try { return { ...DEFAULT_KEYS, ...JSON.parse(localStorage.getItem('cozyKeys') || '{}') }; } catch { return { ...DEFAULT_KEYS }; } }
 let KEYS = loadKeys();
@@ -140,6 +141,7 @@ const COMMAND_FNS = {
 	'editor.action.formatDocument': () => formatActive(),
 	'workbench.action.openSettings': () => openSettings(),
 	'workbench.action.toggleClaude': () => Claude.toggleAux(),
+	'markdown.showPreview': () => { const t = findTab(state.active); if (t && t.path && /\.md$/i.test(t.path)) MD.openMarkdownPreview(t.path); else toast('Active file is not Markdown'); },
 	'workbench.action.zoomIn': () => zoomIn(),
 	'workbench.action.zoomOut': () => zoomOut(),
 	'workbench.action.zoomReset': () => zoomReset(),
@@ -575,6 +577,9 @@ const MENUS = {
 		'-',
 		{ label: 'Toggle Terminal', key: () => KEYS['workbench.action.terminal.toggle'], run: toggleTerminal },
 		{ label: 'Toggle Sidebar', key: () => KEYS['workbench.action.toggleSidebar'], run: toggleSidebar },
+		'-',
+		{ label: 'Markdown: Open Preview', key: () => KEYS['markdown.showPreview'], run: () => COMMAND_FNS['markdown.showPreview']() },
+		{ label: 'Markdown: Open Graph View', run: () => MD.openMarkdownGraph() },
 	],
 	Go: [
 		{ label: 'Go to File...', key: () => KEYS['workbench.quickOpen'], run: quickOpen },
@@ -683,7 +688,10 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.16.0';
+// real version from the Tauri app (a hardcoded string here once drifted from the
+// built exe and made About/update toasts lie)
+let APP_VERSION = '';
+window.__TAURI__.app.getVersion().then(v => { APP_VERSION = v; }).catch(() => { APP_VERSION = '?'; });
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.
@@ -860,7 +868,8 @@ Object.assign(Settings, {
 
 	// start the extension host on launch so extensions load/activate even before a
 	// folder is opened (so they actually work after a restart, not just show "Installed")
-	try { setTimeout(() => Ext.startExtHost(), 1500); } catch { }
+	// start immediately — extensions must be ready the moment the app opens (VSCode is)
+	try { setTimeout(() => Ext.startExtHost(), 100); } catch { }
 
 	// check for updates on EVERY launch; toast "up to date" when current
 	try { setTimeout(() => checkForUpdate(null, true, true), 3000); } catch { }

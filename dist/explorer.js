@@ -58,6 +58,7 @@ function setWindowTitle(name) {
 	// the command-center search pill shows the folder now; #tb-title stays an
 	// empty drag region (text there looked like a stray label next to the menu)
 	document.title = (state.remote ? '[SSH] ' : '') + name + ' - CozyCode';
+	try { Ext.notifyWorkspace && Ext.notifyWorkspace(); } catch { }
 }
 
 async function renderTree() {
@@ -115,9 +116,15 @@ async function renderDir(dir, container, depth) {
 /* ---- context menus ---- */
 function fileContextMenu(e, x, y) {
 	const repo = Git.repoOf ? Git.repoOf(e.path) : null;
+	const isMd = /\.md$/i.test(e.name);
 	contextMenu(x, y, [
 		{ label: 'Open', run: () => pinFile(e.path) },
 		{ label: 'Open to the Side', key: 'Ctrl+Enter', run: () => openFile(e.path, { preview: false }) },
+		...(isMd ? [
+			'-',
+			{ label: 'Preview Markdown', key: 'Ctrl+Shift+V', run: () => MD.openMarkdownPreview(e.path) },
+			{ label: 'Open Graph View', run: () => MD.openMarkdownGraph(e.path) },
+		] : []),
 		'-',
 		{ label: 'Add File to Chat', run: () => Claude.addFileToChat && Claude.addFileToChat(e.path) },
 		'-',

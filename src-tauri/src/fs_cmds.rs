@@ -116,3 +116,84 @@ pub async fn delete_path(path: String) -> Result<(), String> {
         fs::remove_file(p).map_err(|e| e.to_string())
     }
 }
+
+// ---------- Markdown graph (Obsidian-style relations) ----------
+// Scans the workspace for .md files and extracts [[wikilinks]] and [text](x.md)
+// links so the frontend can draw a relation graph. Capped walk, skips heavy dirs.
+
+#[derive(Serialize)]
+pub struct MdNode {
+    pub path: String,  // absolute
+    pub name: String,  // file stem, e.g. "Changelog"
+    pub links: Vec<String>, // raw link targets (wikilink names or relative md paths)
+}
+
+fn md_walk(dir: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize, seen: &mut usize) {
+    if depth > 6 || *seen > 20000 {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        *seen += 1;
+        if *seen > 20000 {
+            return;
+        }
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if p.is_dir() {
+            if name.starts_with('.') || matches!(name.as_str(), "node_modules" | "target" | "dist" | "build" | "out" | "vendor") {
+                continue;
+            }
+            md_walk(&p, out, depth + 1, seen);
+        } else if name.to_lowercase().ends_with(".md") {
+            out.push(p);
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn md_graph(root: String) -> Result<Vec<MdNode>, String> {
+    let mut files = Vec::new();
+    let mut seen = 0usize;
+    md_walk(Path::new(&root), &mut files, 0, &mut seen);
+    let mut nodes = Vec::new();
+    for f in files {
+        let Ok(text) = fs::read_to_string(&f) else { continue };
+        let mut links = Vec::new();
+        // [[wikilink]] or [[wikilink|alias]]
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i + 3 < bytes.len() {
+            if bytes[i] == b'[' && bytes[i + 1] == b'[' {
+                if let Some(end) = text[i + 2..].find("]]") {
+                    let inner = &text[i + 2..i + 2 + end];
+                    let target = inner.split('|').next().unwrap_or("").split('#').next().unwrap_or("").trim();
+                    if !target.is_empty() {
+                        links.push(target.to_string());
+                    }
+                    i += end + 4;
+                    continue;
+                }
+            }
+            // [text](target.md)
+            if bytes[i] == b']' && bytes[i + 1] == b'(' {
+                if let Some(end) = text[i + 2..].find(')') {
+                    let target = text[i + 2..i + 2 + end].split('#').next().unwrap_or("").trim();
+                    let t = target.to_lowercase();
+                    if t.ends_with(".md") && !t.starts_with("http") {
+                        links.push(target.to_string());
+                    }
+                    i += end + 3;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        nodes.push(MdNode {
+            name: f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+            path: f.to_string_lossy().into_owned(),
+            links,
+        });
+    }
+    Ok(nodes)
+}
