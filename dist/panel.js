@@ -203,6 +203,7 @@ function bindTunnel() {
 		const t = publicTunnels.find(t => t.port === e.payload.port);
 		if (t) { t.url = e.payload.url; toast('Tunnel ready: ' + t.url, 6000); renderPorts(); }
 	});
+	listen('tunnel-log', e => toast(String(e.payload), 4000));
 }
 
 function renderPorts() {
@@ -307,29 +308,23 @@ async function addForward() {
 }
 
 /* ================= resizers ================= */
-function makeHResizer(el, target, min, max, invert) {
-	el.addEventListener('mousedown', e => {
-		e.preventDefault();
-		const startX = e.clientX, startW = target.offsetWidth;
-		const move = ev => {
-			let w = startW + (invert ? startX - ev.clientX : ev.clientX - startX);
-			w = Math.max(min, Math.min(max(), w));
-			target.style.width = w + 'px';
-		};
-		const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
-		document.addEventListener('mousemove', move);
-		document.addEventListener('mouseup', up);
-	});
-}
-function makeVResizer(el, target, min) {
+// track the pointer in the zoomed coordinate space, then divide by zoom to get
+// layout px for style.* — keeps the drag edge exactly under the cursor.
+const zoom = () => parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+
+// bottom panel: height = distance from status bar top up to the cursor.
+// dragging below a threshold hides the panel WITHOUT killing terminals.
+function makeVResizer(el) {
 	el.addEventListener('mousedown', e => {
 		e.preventDefault();
 		showPanel();
-		const startY = e.clientY, startH = target.offsetHeight;
+		const bottom = $('#statusbar').getBoundingClientRect().top;
 		const move = ev => {
-			let h = startH + (startY - ev.clientY);
-			h = Math.max(min, Math.min(window.innerHeight - 150, h));
-			target.style.height = h + 'px';
+			const z = zoom();
+			let h = (bottom - ev.clientY) / z;
+			if (h < 40) { hidePanel(); return; }
+			h = Math.min((window.innerHeight / z) - 120, h);
+			$('#panel').style.height = h + 'px';
 			activeTerm && activeTerm.fit.fit();
 		};
 		const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
@@ -338,7 +333,26 @@ function makeVResizer(el, target, min) {
 	});
 }
 
-Object.assign(Panel, { showPanel, hidePanel, switchPanelTab, newTerminal, toggleTerminal, setProblems, updateProblemsStatus });
+// left sidebar: width = cursor X minus sidebar left. Dragging narrow hides it.
+function makeHResizer(el, target) {
+	el.addEventListener('mousedown', e => {
+		e.preventDefault();
+		const left = target.getBoundingClientRect().left;
+		const move = ev => {
+			const z = zoom();
+			let w = (ev.clientX - left) / z;
+			if (w < 100) { target.style.display = 'none'; el.style.display = 'none'; return; }
+			w = Math.min((window.innerWidth / z) - 400, Math.max(150, w));
+			target.style.display = 'flex';
+			target.style.width = w + 'px';
+		};
+		const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+		document.addEventListener('mousemove', move);
+		document.addEventListener('mouseup', up);
+	});
+}
+
+Object.assign(Panel, { showPanel, hidePanel, switchPanelTab, newTerminal, toggleTerminal, setProblems, updateProblemsStatus, activeTerminal: () => activeTerm });
 window.toggleTerminal = toggleTerminal;
 
 /* wire up */
@@ -348,6 +362,6 @@ $('#btn-term-select').onclick = pickShellTerminal;
 $('#btn-term-split').onclick = () => { showPanel(); switchPanelTab('terminal'); newTerminal(true); };
 $('#btn-term-kill').onclick = killTerminal;
 $('#btn-panel-close').onclick = hidePanel;
-makeVResizer($('#panel-resizer'), $('#panel'), 80);
-makeVResizer($('#panel-open-strip'), $('#panel'), 80);
-makeHResizer($('#sidebar-resizer'), $('#sidebar'), 170, () => window.innerWidth - 400, false);
+makeVResizer($('#panel-resizer'));
+makeVResizer($('#panel-open-strip'));
+makeHResizer($('#sidebar-resizer'), $('#sidebar'));

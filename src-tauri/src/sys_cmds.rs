@@ -76,6 +76,28 @@ pub fn detect_shells() -> Vec<ShellInfo> {
     out
 }
 
+// Resolve an executable to its full path (handles .cmd/.bat/.exe via `where`,
+// which honours PATHEXT). Used so we can launch npm-shim CLIs like `claude`
+// (which is claude.cmd, not on the raw CreateProcess search path in a pty).
+#[tauri::command]
+pub fn resolve_command(name: String) -> Option<String> {
+    which(&name)
+}
+
+// Check the latest published release on GitHub (public API, no auth).
+#[tauri::command]
+pub fn check_update() -> Result<serde_json::Value, String> {
+    let out = crate::util::command("powershell")
+        .args(["-NoProfile", "-Command",
+            "(Invoke-RestMethod -Uri 'https://api.github.com/repos/Cozy-DEV-org/CozyCode/releases/latest' -Headers @{'User-Agent'='CozyCode'}) | Select-Object tag_name,html_url,name | ConvertTo-Json -Compress"])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).chars().take(200).collect());
+    }
+    serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {

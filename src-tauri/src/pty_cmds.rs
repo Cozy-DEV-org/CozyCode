@@ -41,7 +41,17 @@ pub fn pty_spawn(
 
     let default_shell = if cfg!(windows) { "powershell.exe" } else { "bash" };
     let shell = shell.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| default_shell.into());
-    let mut cmd = CommandBuilder::new(&shell);
+    // .cmd/.bat (npm shims like claude.cmd) can't launch via CreateProcess directly;
+    // run through cmd /c so the pty gets a real interactive session.
+    let low = shell.to_lowercase();
+    let mut cmd = if cfg!(windows) && (low.ends_with(".cmd") || low.ends_with(".bat")) {
+        let mut c = CommandBuilder::new("cmd.exe");
+        c.arg("/c");
+        c.arg(&shell);
+        c
+    } else {
+        CommandBuilder::new(&shell)
+    };
     if let Some(a) = args {
         for arg in a {
             cmd.arg(arg);

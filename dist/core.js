@@ -286,6 +286,7 @@ async function openFile(path, opts = {}) {
 	if (preview) state.previewTab = path;
 	state.tabs.push(tab);
 	activateTab(tab.key);
+	Settings.suggestTooling(langOf(path));
 }
 
 // media viewer tab (image/video/audio/pdf/csv/xlsx) rendered with native browser + SheetJS

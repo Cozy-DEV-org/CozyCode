@@ -18,6 +18,8 @@ mod util;
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(pty_cmds::PtyState::default())
         .manage(ssh_cmds::SshState::default())
         .manage(exthost_cmds::ExtHostState::default())
@@ -71,6 +73,8 @@ fn main() {
             gh_cmds::gh_device_start,
             gh_cmds::gh_device_poll,
             sys_cmds::detect_shells,
+            sys_cmds::resolve_command,
+            sys_cmds::check_update,
             sys_cmds::open_url,
             tunnel_cmds::tunnel_start,
             tunnel_cmds::tunnel_stop,

@@ -31,14 +31,14 @@ function openAux() {
 	auxOpen = true;
 	$('#aux').classList.remove('hidden');
 	$('#aux-resizer').classList.remove('hidden');
-	$('#btn-claude').classList.add('active');
+	$('#tb-claude').classList.add('active');
 	setMode(auxMode);
 }
 function closeAux() {
 	auxOpen = false;
 	$('#aux').classList.add('hidden');
 	$('#aux-resizer').classList.add('hidden');
-	$('#btn-claude').classList.remove('active');
+	$('#tb-claude').classList.remove('active');
 }
 
 function setMode(mode) {
@@ -124,35 +124,55 @@ function newChat() { chatHistory = []; $('#chat-messages').innerHTML = ''; updat
 
 /* ---------- Claude Code CLI ---------- */
 async function startClaudeCli() {
+	// resolve the real path (claude is a claude.cmd npm shim on Windows)
+	const claudePath = await invoke('resolve_command', { name: 'claude' }).catch(() => null);
+	const cli = $('#aux-cli');
+	if (!claudePath) {
+		cli.innerHTML = `<div class="cli-install">
+			<div class="codicon codicon-sparkle" style="font-size:32px;color:#d98a4b"></div>
+			<div>Claude Code CLI is not installed.</div>
+			<button class="set-btn" id="cli-install-btn">Install Claude Code</button>
+			<div class="desc">Runs: npm i -g @anthropic-ai/claude-code</div>
+		</div>`;
+		$('#cli-install-btn').onclick = installClaude;
+		return;
+	}
+	cli.innerHTML = '<div id="claude-term"></div>';
 	if (typeof Terminal === 'undefined') { toast('Terminal lib not loaded'); return; }
 	if (!claudeBound) {
 		claudeBound = true;
 		listen('pty-output', e => { if (e.payload.id === claudePty) claudeTerm.write(e.payload.data); });
-		listen('pty-exit', e => { if (e.payload === claudePty) { claudeTerm.write('\r\n[claude exited]\r\n'); claudePty = null; } });
+		listen('pty-exit', e => { if (e.payload === claudePty) { claudeTerm && claudeTerm.write('\r\n[claude exited]\r\n'); claudePty = null; } });
 	}
-	if (!claudeTerm) {
-		claudeTerm = new Terminal({ fontSize: 12, theme: { background: '#1e1e1e' }, cursorBlink: true });
-		claudeFit = new FitAddon.FitAddon();
-		claudeTerm.loadAddon(claudeFit);
-		claudeTerm.open($('#claude-term'));
-		claudeFit.fit();
-		claudeTerm.onData(d => claudePty && invoke('pty_write', { id: claudePty, data: d }));
-		claudeTerm.onResize(({ cols, rows }) => claudePty && invoke('pty_resize', { id: claudePty, cols, rows }));
-		new ResizeObserver(() => claudeFit && claudeFit.fit()).observe($('#claude-term'));
-	}
+	claudeTerm = new Terminal({ fontSize: 12, theme: { background: '#1e1e1e' }, cursorBlink: true });
+	claudeFit = new FitAddon.FitAddon();
+	claudeTerm.loadAddon(claudeFit);
+	claudeTerm.open($('#claude-term'));
 	claudeFit.fit();
-	if (!claudePty) {
-		try {
-			claudePty = await invoke('pty_spawn', { cwd: state.root || '', cols: claudeTerm.cols, rows: claudeTerm.rows, shell: 'claude', args: null });
-		} catch (e) {
-			claudeTerm.write('\r\nClaude Code CLI not found. Install: npm i -g @anthropic-ai/claude-code\r\n');
-		}
+	claudeTerm.onData(d => claudePty && invoke('pty_write', { id: claudePty, data: d }));
+	claudeTerm.onResize(({ cols, rows }) => claudePty && invoke('pty_resize', { id: claudePty, cols, rows }));
+	new ResizeObserver(() => claudeFit && claudeFit.fit()).observe($('#claude-term'));
+	try {
+		claudePty = await invoke('pty_spawn', { cwd: state.root || '', cols: claudeTerm.cols, rows: claudeTerm.rows, shell: claudePath, args: null });
+	} catch (e) {
+		claudeTerm.write('\r\nFailed to start Claude Code: ' + e + '\r\n');
 	}
 	claudeTerm.focus();
 }
 
+// install Claude Code CLI in a terminal (visible so the user sees npm progress)
+async function installClaude() {
+	toast('Installing Claude Code CLI...', 4000);
+	Panel.showPanel('terminal');
+	await Panel.newTerminal(false);
+	setTimeout(() => {
+		const t = Panel.activeTerminal && Panel.activeTerminal();
+		if (t && t.ptyId) invoke('pty_write', { id: t.ptyId, data: 'npm i -g @anthropic-ai/claude-code\r' });
+	}, 800);
+}
+
 /* ---------- wiring ---------- */
-$('#btn-claude').onclick = toggleAux;
+$('#tb-claude').onclick = toggleAux;
 $('#aux-close').onclick = closeAux;
 $('#aux-clear').onclick = () => auxMode === 'chat' ? newChat() : (claudePty && invoke('pty_write', { id: claudePty, data: '\x0c' }));
 $$('.aux-mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));

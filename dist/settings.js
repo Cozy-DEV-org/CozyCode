@@ -273,6 +273,33 @@ async function pickTheme() {
 	showPalette(items, 'Select Color Theme');
 }
 
+/* ============ suggest a formatter/linter when the language has none ============ */
+const BUILTIN_FMT = new Set(['json', 'jsonc', 'html', 'css', 'scss', 'less', 'javascript', 'typescript']);
+const FMT_SUGGEST = {
+	python: ['ms-python.black-formatter', 'Black Formatter'],
+	rust: ['rust-lang.rust-analyzer', 'rust-analyzer'],
+	go: ['golang.go', 'Go'],
+	php: ['bmewburn.vscode-intelephense-client', 'Intelephense'],
+	lua: ['sumneko.lua', 'Lua'],
+	ruby: ['rebornix.ruby', 'Ruby'],
+	cpp: ['ms-vscode.cpptools', 'C/C++'],
+	c: ['ms-vscode.cpptools', 'C/C++'],
+	java: ['redhat.java', 'Language Support for Java'],
+	yaml: ['redhat.vscode-yaml', 'YAML'],
+	shell: ['foxundermoon.shell-format', 'shell-format'],
+};
+const _suggested = new Set();
+async function suggestTooling(langId) {
+	if (!langId || langId === 'plaintext' || BUILTIN_FMT.has(langId)) return;
+	if (_suggested.has(langId)) return;
+	if (state.settings['formatter.command']) return; // user has a global formatter
+	const s = FMT_SUGGEST[langId];
+	if (!s) return;
+	_suggested.add(langId);
+	try { if ((await invoke('ext_list')).some(e => e.id === s[0])) return; } catch { }
+	toast(`No formatter for ${langId}. Recommended: ${s[1]}. Open Extensions to install.`, 6000);
+}
+
 /* ================= formatter ================= */
 async function formatActive() { const tab = findTab(state.active); if (tab && tab.kind === 'file' && tab.path) await formatFile(tab.path, tab.model); }
 async function formatFile(path, model) {
@@ -567,17 +594,58 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
+const APP_VERSION = '0.7.0';
+
+// Self-update via the Tauri updater plugin: check GitHub latest.json, download the
+// signed artifact, install, relaunch. Falls back to opening the release page.
+async function checkForUpdate(el) {
+	el.textContent = 'Checking for updates...';
+	const U = window.__TAURI__ && window.__TAURI__.updater;
+	const P = window.__TAURI__ && window.__TAURI__.process;
+	try {
+		if (U && U.check) {
+			const update = await U.check();
+			if (update && update.available) {
+				el.innerHTML = `Update <b>v${esc(update.version)}</b> available. <a href="#" id="upd-go" style="color:var(--status)">Install now</a>`;
+				$('#upd-go').onclick = async ev => {
+					ev.preventDefault();
+					el.textContent = 'Downloading update...';
+					try {
+						await update.downloadAndInstall();
+						el.textContent = 'Installed. Restarting...';
+						if (P && P.relaunch) await P.relaunch();
+					} catch (e) { el.textContent = 'Update failed: ' + e; }
+				};
+			} else el.textContent = 'You are on the latest version (' + APP_VERSION + ').';
+			return;
+		}
+	} catch (e) { /* fall through to manual */ }
+	// fallback: manual check via GitHub API + open release page
+	try {
+		const r = await invoke('check_update');
+		const latest = (r.tag_name || '').replace(/^v/, '');
+		if (latest && latest !== APP_VERSION) {
+			el.innerHTML = `Update <b>v${esc(latest)}</b> available. <a href="#" id="upd-go" style="color:var(--status)">Download</a>`;
+			$('#upd-go').onclick = e => { e.preventDefault(); invoke('open_url', { url: r.html_url }); };
+		} else el.textContent = 'You are on the latest version (' + APP_VERSION + ').';
+	} catch (e) { el.textContent = 'Update check failed: ' + e; }
+}
+
 function showAbout() {
 	const overlay = document.createElement('div');
 	overlay.className = 'modal-overlay';
 	overlay.innerHTML = `<div class="modal about-modal">
-		<img src="logo.svg" style="width:48px;height:48px">
-		<div class="modal-title" style="font-size:20px;margin-top:8px">CozyCode</div>
-		<div class="modal-msg">Version 0.6.0<br>Rust + Tauri rework of Code - OSS (MIT)<br>No telemetry. Cozy and light.</div>
-		<div class="modal-msg" style="font-size:11px">github.com/Cozy-DEV-org/CozyCode</div>
-		<div class="modal-btns"><button class="modal-btn primary" data-c="ok">OK</button></div>
+		<img src="logo.svg" style="width:56px;height:56px">
+		<div class="modal-title" style="font-size:22px;margin-top:8px">CozyCode</div>
+		<div class="modal-msg">Version ${APP_VERSION}<br>Developed by <b>CozyDev</b> (Cozy-DEV-org)<br>Rust + Tauri rework of Code - OSS (MIT)<br>No telemetry. Cozy and light.</div>
+		<div id="about-update" class="modal-msg" style="font-size:11px">github.com/Cozy-DEV-org/CozyCode</div>
+		<div class="modal-btns">
+			<button class="modal-btn" data-c="upd">Check for Update</button>
+			<button class="modal-btn primary" data-c="ok">OK</button>
+		</div>
 	</div>`;
 	overlay.querySelector('[data-c=ok]').onclick = () => overlay.remove();
+	overlay.querySelector('[data-c=upd]').onclick = () => checkForUpdate($('#about-update'));
 	overlay.addEventListener('mousedown', e => { if (e.target === overlay) overlay.remove(); });
 	document.body.appendChild(overlay);
 }
@@ -614,7 +682,7 @@ window.addEventListener('keydown', e => {
 
 Object.assign(Settings, {
 	showPalette, commandPalette, openSettings, openKeybindings, pickTheme,
-	generateCommitMessage, createPR, formatFile, formatActive,
+	generateCommitMessage, createPR, formatFile, formatActive, suggestTooling, aiConfig,
 });
 
 /* ================= startup ================= */

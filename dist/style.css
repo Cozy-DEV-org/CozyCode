@@ -28,6 +28,15 @@ body {
 }
 .menu-btn:hover, .menu-btn.open { background: rgba(255,255,255,.1); }
 #tb-title { flex: 1; text-align: center; color: var(--fg-dim); overflow: hidden; white-space: nowrap; }
+#tb-claude {
+	background: none; border: none; color: var(--fg-dim); cursor: pointer; height: 100%; padding: 0 10px;
+	font-family: inherit; font-size: 12px; display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+}
+#tb-claude:hover { background: rgba(255,255,255,.1); color: var(--fg); }
+#tb-claude.active { color: #d98a4b; }
+#tb-claude .codicon { font-size: 14px; }
+.cli-install { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; text-align: center; padding: 20px; color: var(--fg); }
+.cli-install .desc { color: var(--fg-dim); font-size: 11px; }
 #window-controls { display: flex; height: 100%; }
 #window-controls button {
 	width: 46px; height: 100%; border: none; background: none; color: inherit; cursor: pointer;
@@ -147,44 +156,51 @@ button.primary:hover { filter: brightness(1.15); }
 .letter-U { color: #73c991; } .letter-C { color: #e4676b; } .letter-R { color: #e2c08d; }
 .scm-commits .tl-item { padding-left: 16px; }
 
-/* ---------- scm sections (VSCode layout) ---------- */
-#view-scm { overflow-y: auto; }
-.scm-section { display: flex; flex-direction: column; }
+/* ---------- scm sections (VSCode layout, compact) ---------- */
+#view-scm { overflow: hidden; }
+.scm-section { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
 .scm-sec-header {
-	display: flex; align-items: center; gap: 4px; padding: 4px 12px; font-size: 11px; font-weight: 700;
-	color: var(--fg); cursor: pointer; text-transform: uppercase; letter-spacing: .3px; flex-shrink: 0;
+	display: flex; align-items: center; gap: 4px; padding: 3px 10px; font-size: 11px; font-weight: 700;
+	color: var(--fg); cursor: pointer; text-transform: uppercase; letter-spacing: .3px; flex-shrink: 0; height: 22px;
 }
-.scm-sec-header:hover { color: #fff; }
+.scm-sec-header:hover { background: var(--hover); }
 .scm-sec-header .codicon { font-size: 14px; }
 .scm-sec-count { background: var(--badge); border-radius: 8px; padding: 0 6px; font-size: 10px; margin-left: 4px; }
-.scm-sec-body { display: flex; flex-direction: column; }
-.scm-empty { padding: 8px 16px; color: var(--fg-dim); font-size: 12px; }
+.scm-sec-body { display: flex; flex-direction: column; overflow-y: auto; }
+/* height limits so no single section eats the whole panel; scroll instead */
+#scm-repos-list { max-height: 200px; }
+#scm-changes { max-height: 45vh; }
+#scm-graph { max-height: 40vh; }
+.scm-empty { padding: 6px 12px; color: var(--fg-dim); font-size: 12px; }
 
-.repo-row { display: flex; align-items: center; gap: 6px; padding: 4px 10px; cursor: pointer; border: 1px solid transparent; }
+.repo-row { display: flex; align-items: center; gap: 5px; padding: 0 8px; height: 22px; cursor: pointer; border-left: 2px solid transparent; }
 .repo-row:hover { background: var(--hover); }
-.repo-row.selected { background: var(--active); border-color: var(--status); }
+.repo-row.selected { background: var(--active); border-left-color: var(--status); }
 .repo-row .repo-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .repo-row .repo-branch { color: var(--fg-dim); font-size: 11px; display: flex; align-items: center; gap: 2px; }
 .repo-row .repo-count { background: var(--badge); border-radius: 8px; padding: 0 5px; font-size: 10px; }
-.repo-row .repo-acts { display: flex; gap: 1px; visibility: hidden; }
-.repo-row:hover .repo-acts { visibility: visible; }
-.repo-acts button { background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 1px 2px; }
-.repo-acts button:hover { color: #fff; }
+/* actions always visible (not hover-only) */
+.repo-row .repo-acts { display: flex; gap: 0; }
+.repo-acts button { background: none; border: none; color: var(--fg-dim); cursor: pointer; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; }
+.repo-acts button:hover { color: #fff; background: rgba(255,255,255,.1); }
 .repo-acts .codicon { font-size: 13px; }
 
-.commit-box { position: relative; margin: 4px 12px 8px; }
-.commit-box .commit-msg { width: 100%; margin: 0; min-height: 28px; }
-.commit-gen { position: absolute; right: 4px; top: 4px; background: none; border: none; color: var(--fg-dim); cursor: pointer; }
+.commit-box { position: relative; margin: 4px 8px; }
+.commit-box .commit-msg { width: 100%; margin: 0; min-height: 26px; padding: 4px 22px 4px 8px; }
+.commit-gen { position: absolute; right: 3px; top: 3px; background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 2px; }
 .commit-gen:hover { color: #fff; }
-.commit-split { display: flex; margin: 0 12px 8px; }
-.commit-main { flex: 1; border-radius: 2px 0 0 2px; width: auto; }
-.commit-caret { width: 28px; flex-shrink: 0; border-left: 1px solid rgba(0,0,0,.25); border-radius: 0 2px 2px 0; }
+.commit-split { display: flex; margin: 0 8px 6px; }
+.commit-main { flex: 1; border-radius: 2px 0 0 2px; width: auto; padding: 4px; }
+.commit-caret { width: 26px; flex-shrink: 0; border-left: 1px solid rgba(0,0,0,.25); border-radius: 0 2px 2px 0; padding: 4px 0; }
+#view-scm .scm-item { height: 22px; padding: 0 6px 0 14px; }
+#view-scm .scm-item .scm-act { visibility: visible; }
+#view-scm .scm-group-title { padding: 3px 10px; }
 
-/* graph */
-.graph-row { display: flex; align-items: center; gap: 6px; padding: 2px 12px 2px 4px; cursor: pointer; font-size: 12px; }
+/* graph (compact) */
+.graph-row { display: flex; align-items: center; gap: 6px; padding: 0 10px 0 4px; height: 22px; cursor: pointer; font-size: 12px; }
 .graph-row:hover { background: var(--hover); }
-.graph-rail { position: relative; width: 16px; height: 22px; flex-shrink: 0; display: flex; justify-content: center; }
-.graph-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--status); margin-top: 7px; z-index: 1; }
+.graph-rail { position: relative; width: 14px; height: 22px; flex-shrink: 0; display: flex; justify-content: center; }
+.graph-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--status); margin-top: 7px; z-index: 1; }
 .graph-line { position: absolute; top: 11px; bottom: -11px; width: 2px; background: var(--border); left: 50%; transform: translateX(-50%); }
 .graph-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-tag { background: var(--accent); color: #fff; border-radius: 3px; padding: 0 5px; font-size: 10px; margin-right: 5px; }

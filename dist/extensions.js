@@ -14,6 +14,7 @@ const RECOMMENDED = [
 	{ id: 'eamodio.gitlens', label: 'GitLens', why: 'Git supercharged' },
 ];
 
+// no-arg = browse mode (Installed + Recommended). with results = search mode.
 async function renderView(searchResults) {
 	const box = $('#ext-results');
 	box.innerHTML = '';
@@ -21,45 +22,49 @@ async function renderView(searchResults) {
 	try { installed = await invoke('ext_list'); } catch { /* ignore */ }
 	const installedIds = new Set(installed.map(x => x.id));
 
-	// INSTALLED
-	const ih = catHeader(`INSTALLED (${installed.length})`);
-	box.appendChild(ih);
-	if (!installed.length) box.appendChild(dim('No extensions installed yet.'));
-	for (const ext of installed) box.appendChild(installedCard(ext, searchResults));
+	if (searchResults && Array.isArray(searchResults.extensions)) {
+		const n = searchResults.extensions.length;
+		box.appendChild(catHeader(`RESULTS (${n}${searchResults.totalSize > n ? ' of ' + searchResults.totalSize : ''})`));
+		if (!n) { box.appendChild(dim('No extensions found. Try another term.')); return; }
+		for (const e of searchResults.extensions) box.appendChild(marketCard(e, installedIds));
+		return;
+	}
 
-	if (searchResults && searchResults.extensions) {
-		box.appendChild(catHeader('MARKETPLACE RESULTS (Open VSX)'));
-		for (const e of searchResults.extensions) box.appendChild(marketCard(e, installedIds, searchResults));
-	} else {
-		// RECOMMENDED
-		box.appendChild(catHeader('RECOMMENDED'));
-		for (const r of RECOMMENDED) {
-			if (installedIds.has(r.id)) continue;
-			const card = document.createElement('div');
-			card.className = 'ext-card';
-			card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px;color:var(--fg-dim)"></span>`;
-			const info = document.createElement('div');
-			info.className = 'ext-info';
-			info.innerHTML = `<div class="ext-name">${esc(r.label)}</div><div class="ext-desc">${esc(r.why)}</div>`;
-			const meta = document.createElement('div');
-			meta.className = 'ext-meta';
-			meta.innerHTML = `<span>${esc(r.id)}</span>`;
-			const btn = document.createElement('button');
-			btn.className = 'ext-btn';
-			btn.textContent = 'Search';
-			btn.onclick = () => { $('#ext-input').value = r.label; searchExtensions(); };
-			meta.appendChild(btn);
-			info.appendChild(meta);
-			card.appendChild(info);
-			box.appendChild(card);
-		}
+	// browse mode
+	box.appendChild(catHeader(`INSTALLED (${installed.length})`));
+	if (!installed.length) box.appendChild(dim('No extensions installed yet.'));
+	for (const ext of installed) box.appendChild(installedCard(ext));
+
+	box.appendChild(catHeader('RECOMMENDED'));
+	for (const r of RECOMMENDED) {
+		if (installedIds.has(r.id)) continue;
+		const card = document.createElement('div');
+		card.className = 'ext-card';
+		card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px;color:var(--fg-dim)"></span>`;
+		const info = document.createElement('div');
+		info.className = 'ext-info';
+		info.innerHTML = `<div class="ext-name">${esc(r.label)}</div><div class="ext-desc">${esc(r.why)}</div>`;
+		const meta = document.createElement('div');
+		meta.className = 'ext-meta';
+		meta.innerHTML = `<span>${esc(r.id)}</span>`;
+		const btn = document.createElement('button');
+		btn.className = 'ext-btn';
+		btn.textContent = 'Search';
+		btn.onclick = () => { $('#ext-input').value = r.label; searchExtensions(); };
+		meta.appendChild(btn);
+		info.appendChild(meta);
+		card.appendChild(info);
+		box.appendChild(card);
 	}
 }
 
 const catHeader = t => { const d = document.createElement('div'); d.className = 'scm-group-title'; d.textContent = t; return d; };
 const dim = t => { const d = document.createElement('div'); d.className = 'scm-group-title'; d.style.cssText = 'padding:8px 12px;color:var(--fg-dim)'; d.textContent = t; return d; };
 
-function installedCard(ext, searchResults) {
+let lastSearch = null;
+function refreshExtView() { renderView(lastSearch); }
+
+function installedCard(ext) {
 	const card = document.createElement('div');
 	card.className = 'ext-card';
 	card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px"></span>`;
@@ -72,7 +77,7 @@ function installedCard(ext, searchResults) {
 	const un = document.createElement('button');
 	un.className = 'ext-btn uninstall';
 	un.textContent = 'Uninstall';
-	un.onclick = async () => { await invoke('ext_uninstall', { id: ext.id }); toast('Uninstalled ' + ext.id); renderView(searchResults); startExtHost(); };
+	un.onclick = async () => { await invoke('ext_uninstall', { id: ext.id }); toast('Uninstalled ' + ext.id); refreshExtView(); startExtHost(); };
 	meta.appendChild(un);
 	for (const th of ext.themes) {
 		const b = document.createElement('button');
@@ -86,7 +91,7 @@ function installedCard(ext, searchResults) {
 	return card;
 }
 
-function marketCard(e, installedIds, searchResults) {
+function marketCard(e, installedIds) {
 	const id = `${e.namespace}.${e.name}`;
 	const card = document.createElement('div');
 	card.className = 'ext-card';
@@ -108,7 +113,7 @@ function marketCard(e, installedIds, searchResults) {
 			try {
 				await invoke('ext_install', { namespace: e.namespace, name: e.name, version: e.version });
 				toast(`Installed ${id}`, 4000);
-				renderView(searchResults);
+				refreshExtView();
 				startExtHost();
 			} catch (err) { btn.disabled = false; btn.textContent = 'Install'; toast('Install failed: ' + err); }
 		};
@@ -121,10 +126,13 @@ function marketCard(e, installedIds, searchResults) {
 
 async function searchExtensions() {
 	const q = $('#ext-input').value.trim();
-	if (!q) { renderView(null); return; }
+	if (!q) { lastSearch = null; renderView(null); return; }
 	$('#ext-results').innerHTML = '<div class="scm-group-title" style="padding:12px">Searching Open VSX...</div>';
-	try { renderView(JSON.parse(await invoke('ext_search', { query: q }))); }
-	catch (e) { $('#ext-results').innerHTML = `<div class="scm-group-title" style="padding:12px">${esc(String(e))}</div>`; }
+	try {
+		const parsed = JSON.parse(await invoke('ext_search', { query: q }));
+		lastSearch = parsed;
+		renderView(parsed);
+	} catch (e) { $('#ext-results').innerHTML = `<div class="scm-group-title" style="padding:12px">${esc(String(e))}</div>`; }
 }
 
 /* ================= extension host (lazy, background) ================= */

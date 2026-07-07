@@ -1,7 +1,7 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
 	"productName": "CozyCode",
-	"version": "0.6.1",
+	"version": "0.7.0",
 	"identifier": "com.cozycode.app",
 	"build": {
 		"frontendDist": "../dist"
@@ -22,7 +22,23 @@
 	},
 	"bundle": {
 		"active": true,
-		"targets": ["nsis"],
-		"icon": ["icons/icon.ico"]
+		"targets": ["nsis", "msi"],
+		"icon": ["icons/icon.ico"],
+		"createUpdaterArtifacts": true,
+		"publisher": "CozyDev",
+		"shortDescription": "A cozy, lightweight code editor",
+		"windows": {
+			"nsis": {
+				"installMode": "currentUser"
+			}
+		}
+	},
+	"plugins": {
+		"updater": {
+			"endpoints": [
+				"https://github.com/Cozy-DEV-org/CozyCode/releases/latest/download/latest.json"
+			],
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZGREQyNjJEMDFFRkJGRTMKUldUanYrOEJMU2JkYjVtTlUvVThCbDA5Z2ZqMnNIOGxrVE83TkNPc1ZNL0V5cGpqTVFIM1dWalMK"
+		}
 	}
 }
