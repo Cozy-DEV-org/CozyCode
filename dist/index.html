@@ -14,7 +14,7 @@
 </head>
 <body>
 	<div id="titlebar" data-tauri-drag-region>
-		<img id="tb-logo" src="logo.svg" alt="">
+		<img id="tb-logo" src="cozycode.png" alt="">
 		<div id="menubar"></div>
 		<div id="tb-title" data-tauri-drag-region>CozyCode</div>
 		<button id="tb-run" title="Run active file (F5)"><span class="codicon codicon-play"></span></button>
@@ -103,6 +103,7 @@
 				<div id="ext-results"></div>
 			</div>
 
+			<div id="ext-views" class="hidden"></div>
 			<div class="view hidden" id="view-remote">
 				<div class="view-title">
 					<span>REMOTE SSH</span>
@@ -147,7 +148,13 @@
 				</div>
 				<div id="panel-body">
 					<div id="pane-problems" class="pane hidden"></div>
-					<div id="pane-output" class="pane hidden"><div id="output-log"></div></div>
+					<div id="pane-output" class="pane hidden">
+						<div id="output-bar">
+							<select id="output-src" title="Filter by source"><option value="">All sources</option></select>
+							<button id="output-clear" title="Clear"><span class="codicon codicon-clear-all"></span></button>
+						</div>
+						<div id="output-log"></div>
+					</div>
 					<div id="pane-terminal" class="pane">
 						<div id="term-area"></div>
 						<div id="term-tabs"></div>

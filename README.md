@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="dist/logo.svg" width="72" alt="CozyCode">
+  <img src="src-tauri/icons/cozycode.png" width="96" alt="CozyCode">
   <h1>CozyCode</h1>
   <p><b>A cozy, lightweight code editor.</b> Rust + Tauri rework of VS Code (Code - OSS).</p>
   <p>Feature parity with VS Code, a fraction of the RAM, and <b>zero telemetry</b>.</p>

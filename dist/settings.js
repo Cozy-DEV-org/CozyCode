@@ -266,7 +266,16 @@ function buildCommands() {
 	);
 	return cmds;
 }
-function commandPalette() { $('#palette')._mode = 'commands'; showPalette(buildCommands(), 'Type a command name'); }
+function commandPalette() {
+	$('#palette')._mode = 'commands';
+	// include commands contributed by installed extensions
+	const extCmds = (Ext.contributedCommands || []).map(c => ({
+		label: (c.category ? c.category + ': ' : '') + (typeof c.title === 'string' ? c.title : c.command),
+		detail: c.command, icon: 'extensions',
+		run: () => Ext.runExtCommand(c.command).catch(e => toast('Command failed: ' + e)),
+	}));
+	showPalette(buildCommands().concat(extCmds), 'Type a command name');
+}
 
 async function pickTheme() {
 	const items = [
@@ -615,6 +624,8 @@ $('#win-min').onclick = () => appWindow.minimize();
 $('#win-max').onclick = () => appWindow.toggleMaximize();
 $('#win-close').onclick = () => appWindow.close();
 $$('.act-btn[data-view]').forEach(b => b.onclick = () => switchView(b.dataset.view));
+$('#activitybar').oncontextmenu = e => { e.preventDefault(); activityBarMenu(e.clientX, e.clientY); };
+applyHiddenViews();
 $('#btn-open-folder').onclick = () => openFolder();
 $('#btn-refresh').onclick = () => { state.fileList = null; Explorer.renderTree(); };
 $('#btn-new-file').onclick = newFile;
@@ -671,7 +682,7 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.11.0';
+const APP_VERSION = '0.12.0';
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.
@@ -754,7 +765,7 @@ function showAbout() {
 	const overlay = document.createElement('div');
 	overlay.className = 'modal-overlay';
 	overlay.innerHTML = `<div class="modal about-modal">
-		<img src="logo.svg" style="width:56px;height:56px">
+		<img src="cozycode.png" style="width:56px;height:56px">
 		<div class="modal-title" style="font-size:22px;margin-top:8px">CozyCode</div>
 		<div class="modal-msg">Version ${APP_VERSION}<br>Developed by <b>CozyDev</b> (Cozy-DEV-org)<br>Rust + Tauri rework of Code - OSS (MIT)<br>No telemetry. Cozy and light.</div>
 		<div id="about-update" class="modal-msg" style="font-size:11px">github.com/Cozy-DEV-org/CozyCode</div>

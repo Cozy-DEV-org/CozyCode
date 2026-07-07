@@ -40,6 +40,9 @@ class EventEmitter {
 const completionProviders = []; // { selector, provider }
 const commands = new Map();
 const diagCollections = [];
+const treeProviders = new Map(); // viewId -> provider
+const treeItemCache = new Map(); // nodeKey -> element (so clicks can resolve back)
+let _nodeSeq = 1;
 
 function selectorMatches(sel, languageId) {
 	if (!sel) return true;
@@ -72,6 +75,24 @@ const vscode = {
 		onDidChangeActiveTextEditor: () => new Disposable(),
 		activeTextEditor: undefined,
 		createTextEditorDecorationType: () => new Disposable(),
+		registerTreeDataProvider: (viewId, provider) => {
+			treeProviders.set(viewId, provider);
+			if (provider.onDidChangeTreeData) { try { provider.onDidChangeTreeData(() => send({ event: 'treeRefresh', params: { viewId } })); } catch {} }
+			send({ event: 'treeReady', params: { viewId } });
+			return new Disposable(() => treeProviders.delete(viewId));
+		},
+		createTreeView: (viewId, opts) => {
+			if (opts && opts.treeDataProvider) vscode.window.registerTreeDataProvider(viewId, opts.treeDataProvider);
+			return { reveal: async () => {}, dispose: () => treeProviders.delete(viewId), onDidChangeSelection: () => new Disposable(), onDidChangeVisibility: () => new Disposable(), visible: true, message: '', title: viewId };
+		},
+		registerWebviewViewProvider: () => new Disposable(),
+		showQuickPick: async (items) => Array.isArray(items) ? (await items)[0] : undefined,
+		showInputBox: async () => undefined,
+		withProgress: async (opts, task) => task({ report: () => {} }, { isCancellationRequested: false, onCancellationRequested: () => new Disposable() }),
+		setStatusBarMessage: () => new Disposable(),
+		registerUriHandler: () => new Disposable(),
+		registerCustomEditorProvider: () => new Disposable(),
+		terminals: [], onDidOpenTerminal: () => new Disposable(), onDidCloseTerminal: () => new Disposable(),
 	},
 	workspace: {
 		getConfiguration: () => ({ get: (k, d) => d, has: () => false, update: async () => {}, inspect: () => undefined }),
@@ -119,7 +140,9 @@ const vscode = {
 	ConfigurationTarget: { Global: 1, Workspace: 2 },
 	MarkdownString: class { constructor(v) { this.value = v || ''; } appendMarkdown(v) { this.value += v; return this; } },
 	ThemeColor: class { constructor(id) { this.id = id; } },
-	TreeItem: class {}, TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+	TreeItem: class { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState || 0; } },
+	TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+	ThemeIcon: class { constructor(id) { this.id = id; } },
 	CodeLens: class {}, Hover: class { constructor(c) { this.contents = [c]; } },
 	Location: class {}, TextEdit: class { static replace(r, t) { return { range: r, newText: t }; } },
 };
@@ -134,6 +157,28 @@ require.cache['vscode'] = { id: 'vscode', filename: 'vscode', loaded: true, expo
 
 /* ---------- load extensions ---------- */
 const loaded = [];
+const contributions = []; // { id, viewsContainers, views, commands }
+function activateExt(dir, base, pkg) {
+	try {
+		const mod = require(path.join(base, pkg.main));
+		if (typeof mod.activate === 'function') {
+			Promise.resolve(mod.activate({
+				subscriptions: [], extensionPath: base,
+				globalState: { get: (k, d) => d, update: async () => {}, keys: () => [] },
+				workspaceState: { get: (k, d) => d, update: async () => {}, keys: () => [] },
+				secrets: { get: async () => undefined, store: async () => {}, delete: async () => {} },
+				asAbsolutePath: r => path.join(base, r),
+				extensionUri: vscode.Uri.file(base), extensionMode: 1,
+				environmentVariableCollection: { replace: () => {}, append: () => {}, prepend: () => {} },
+			})).then(
+				() => { setStatus(dir, 'activated'); },
+				e => { setStatus(dir, 'activate failed: ' + e.message); },
+			);
+		} else setStatus(dir, 'loaded (no activate)');
+	} catch (e) { setStatus(dir, 'load failed: ' + String(e.message).slice(0, 120)); }
+}
+function setStatus(id, status) { const e = loaded.find(x => x.id === id); if (e) e.status = status; sendLoaded(); }
+
 if (extRoot && fs.existsSync(extRoot)) {
 	for (const dir of fs.readdirSync(extRoot)) {
 		const base = path.join(extRoot, dir, 'extension');
@@ -141,28 +186,20 @@ if (extRoot && fs.existsSync(extRoot)) {
 		if (!fs.existsSync(pkgPath)) continue;
 		let pkg;
 		try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { continue; }
-		if (!pkg.main) { loaded.push({ id: dir, status: 'no-code (themes/snippets only)' }); continue; }
-		try {
-			const mod = require(path.join(base, pkg.main));
-			if (typeof mod.activate === 'function') {
-				Promise.resolve(mod.activate({
-					subscriptions: [], extensionPath: base,
-					globalState: { get: (k, d) => d, update: async () => {} },
-					workspaceState: { get: (k, d) => d, update: async () => {} },
-					asAbsolutePath: r => path.join(base, r),
-					extensionUri: vscode.Uri.file(base),
-				})).then(
-					() => { loaded.push({ id: dir, status: 'activated' }); sendLoaded(); },
-					e => { loaded.push({ id: dir, status: 'activate failed: ' + e.message }); sendLoaded(); },
-				);
-			} else loaded.push({ id: dir, status: 'loaded (no activate)' });
-		} catch (e) {
-			loaded.push({ id: dir, status: 'load failed: ' + String(e.message).slice(0, 120) });
-		}
+		// collect contributions for the native sidebar adapter
+		const c = pkg.contributes || {};
+		const vc = ((c.viewsContainers && c.viewsContainers.activitybar) || []);
+		const views = [];
+		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: v.name });
+		if (vc.length || views.length || (c.commands || []).length)
+			contributions.push({ id: dir, viewsContainers: vc, views, commands: (c.commands || []).map(cm => ({ command: cm.command, title: cm.title, category: cm.category })) });
+		loaded.push({ id: dir, status: pkg.main ? 'loading' : 'no-code (themes/snippets)' });
+		if (pkg.main) activateExt(dir, base, pkg);
 	}
 }
 function sendLoaded() { send({ event: 'loaded', params: loaded }); }
 sendLoaded();
+send({ event: 'contributes', params: contributions });
 
 /* ---------- rpc ---------- */
 function makeDocument(p) {
@@ -212,4 +249,40 @@ rl.on('line', async line => {
 		send({ id: msg.id, result: items });
 	}
 	if (msg.method === 'listLoaded') send({ id: msg.id, result: loaded });
+
+	// tree data for a contributed view: children of a node (or roots when no node)
+	if (msg.method === 'treeChildren') {
+		const { viewId, nodeKey } = msg.params;
+		const provider = treeProviders.get(viewId);
+		if (!provider) { send({ id: msg.id, result: [] }); return; }
+		try {
+			const element = nodeKey ? treeItemCache.get(nodeKey) : undefined;
+			const children = (await provider.getChildren(element)) || [];
+			const out = [];
+			for (const ch of children) {
+				let item = await provider.getTreeItem(ch);
+				if (!item) continue;
+				const key = 'n' + (_nodeSeq++);
+				treeItemCache.set(key, ch);
+				const label = typeof item.label === 'object' ? item.label.label : (item.label || item.title || '');
+				out.push({
+					nodeKey: key,
+					label: String(label),
+					description: item.description ? String(item.description) : '',
+					tooltip: item.tooltip ? String(item.tooltip.value || item.tooltip) : '',
+					collapsible: item.collapsibleState || 0,
+					icon: item.iconPath && item.iconPath.id ? item.iconPath.id : '',
+					command: item.command ? { command: item.command.command, args: item.command.arguments || [] } : null,
+					contextValue: item.contextValue || '',
+				});
+			}
+			send({ id: msg.id, result: out });
+		} catch (e) { log('tree error: ' + e.message); send({ id: msg.id, result: [] }); }
+		return;
+	}
+	if (msg.method === 'executeCommand') {
+		try { const r = await vscode.commands.executeCommand(msg.params.command, ...(msg.params.args || [])); send({ id: msg.id, result: r === undefined ? null : (typeof r === 'object' ? '[object]' : r) }); }
+		catch (e) { send({ id: msg.id, result: null, error: e.message }); }
+		return;
+	}
 });

@@ -71,6 +71,7 @@ async function newTerminal(split = false, shell = null) {
 	setActiveTerm(entry);
 	renderTermTabs();
 	box.onclick = () => setActiveTerm(entry);
+	cozyLog('terminal:' + entry.name, 'started (' + (shell ? shell.name : 'default') + ')');
 }
 
 // dropdown to pick which shell to launch (VSCode "+" caret)
@@ -371,6 +372,8 @@ $('#btn-term-select').onclick = pickShellTerminal;
 $('#btn-term-split').onclick = () => { showPanel(); switchPanelTab('terminal'); newTerminal(true); };
 $('#btn-term-kill').onclick = killTerminal;
 $('#btn-panel-close').onclick = hidePanel;
+$('#output-src').onchange = renderOutput;
+$('#output-clear').onclick = () => { _logBuf.length = 0; renderOutput(); };
 makeVResizer($('#panel-resizer'));
 makeVResizer($('#panel-open-strip'));
 makeHResizer($('#sidebar-resizer'), $('#sidebar'));

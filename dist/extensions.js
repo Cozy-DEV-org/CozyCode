@@ -159,6 +159,100 @@ async function searchExtensions() {
 	} catch (e) { $('#ext-results').innerHTML = `<div class="scm-group-title" style="padding:12px">${esc(String(e))}</div>`; }
 }
 
+/* ============ native adapter: contributed views / commands / trees ============ */
+const contributedCommands = []; // {command, title, category}
+const extContainers = [];       // {id, title, icon, views:[{id,name,ready}]}
+const treeReady = new Set();    // viewIds whose provider registered
+
+function applyContributions(list) {
+	for (const c of list || []) {
+		for (const cmd of c.commands || []) if (!contributedCommands.some(x => x.command === cmd.command)) contributedCommands.push(cmd);
+		for (const vc of c.viewsContainers || []) {
+			if (extContainers.some(x => x.id === vc.id)) continue;
+			extContainers.push({ id: vc.id, title: vc.title || vc.id, icon: vc.icon, views: (c.views || []).filter(v => v.container === vc.id) });
+		}
+		// views contributed into built-in containers -> collect under an "Extensions" container
+		const builtins = (c.views || []).filter(v => !(c.viewsContainers || []).some(x => x.id === v.container));
+		if (builtins.length) {
+			let ec = extContainers.find(x => x.id === '__ext__');
+			if (!ec) { ec = { id: '__ext__', title: 'Extension Views', icon: '', views: [] }; extContainers.push(ec); }
+			for (const v of builtins) if (!ec.views.some(x => x.id === v.id)) ec.views.push(v);
+		}
+	}
+	renderExtActivityButtons();
+	cozyLog('exthost', `contributions: ${extContainers.length} container(s), ${contributedCommands.length} command(s)`);
+}
+
+function renderExtActivityButtons() {
+	// add an activity-bar icon per contributed container (once)
+	const bar = $('#activitybar');
+	const spacer = bar.querySelector('.act-spacer');
+	for (const ct of extContainers) {
+		if (bar.querySelector(`[data-extview="${ct.id}"]`)) continue;
+		const b = document.createElement('button');
+		b.className = 'act-btn';
+		b.dataset.extview = ct.id;
+		b.title = ct.title;
+		b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
+		b.onclick = () => showExtContainer(ct.id);
+		bar.insertBefore(b, spacer);
+	}
+}
+
+function showExtContainer(id) {
+	const ct = extContainers.find(x => x.id === id);
+	if (!ct) return;
+	$$('.act-btn').forEach(b => b.classList.remove('active'));
+	$(`[data-extview="${id}"]`).classList.add('active');
+	$$('#sidebar .view').forEach(v => v.classList.add('hidden'));
+	$('#sidebar').style.display = 'flex'; $('#sidebar-resizer').style.display = 'block';
+	const host = $('#ext-views');
+	host.classList.remove('hidden');
+	host.innerHTML = `<div class="view-title"><span>${esc(ct.title.toUpperCase())}</span></div>`;
+	for (const v of ct.views) {
+		const sec = document.createElement('div');
+		sec.className = 'ext-tree-sec';
+		const hdr = document.createElement('div');
+		hdr.className = 'scm-sec-header';
+		hdr.innerHTML = `<span class="codicon codicon-chevron-down"></span> ${esc((v.name || v.id).toUpperCase())}`;
+		const body = document.createElement('div');
+		body.className = 'ext-tree';
+		hdr.onclick = () => { const h = body.classList.toggle('hidden'); hdr.querySelector('.codicon').className = `codicon codicon-chevron-${h ? 'right' : 'down'}`; };
+		sec.appendChild(hdr); sec.appendChild(body);
+		host.appendChild(sec);
+		loadTreeChildren(v.id, null, body, 0);
+	}
+}
+
+async function loadTreeChildren(viewId, nodeKey, container, depth) {
+	container.innerHTML = depth === 0 ? '<div class="ext-tree-item" style="color:var(--fg-dim)">Loading...</div>' : '';
+	const nodes = await rpc('treeChildren', { viewId, nodeKey }, 6000) || [];
+	container.innerHTML = '';
+	if (!nodes.length && depth === 0) { container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim)">(empty)</div>'; return; }
+	for (const n of nodes) {
+		const row = document.createElement('div');
+		row.className = 'ext-tree-item';
+		row.style.paddingLeft = (depth * 12 + 8) + 'px';
+		const canExpand = n.collapsible > 0;
+		row.innerHTML = `<span class="twist codicon ${canExpand ? 'codicon-chevron-right' : ''}"></span>` +
+			`<span class="codicon codicon-${n.icon || (canExpand ? 'folder' : 'circle-small')}"></span>` +
+			`<span class="et-label">${esc(n.label)}</span>` + (n.description ? `<span class="et-desc">${esc(n.description)}</span>` : '');
+		if (n.tooltip) row.title = n.tooltip;
+		const child = document.createElement('div');
+		container.appendChild(row); container.appendChild(child);
+		let open = false;
+		row.onclick = async () => {
+			if (canExpand) {
+				open = !open;
+				row.querySelector('.twist').className = `twist codicon codicon-chevron-${open ? 'down' : 'right'}`;
+				if (open && !child.childElementCount) await loadTreeChildren(viewId, n.nodeKey, child, depth + 1);
+				else if (!open) child.innerHTML = '';
+			}
+			if (n.command) { try { await rpc('executeCommand', { command: n.command.command, args: n.command.args }, 8000); } catch { } }
+		};
+	}
+}
+
 /* ================= extension host (lazy, background) ================= */
 let extHostBound = false, extHostStarting = null;
 
@@ -191,13 +285,17 @@ function onExtLine(line) {
 		state.rpcWaiters.delete(msg.id);
 		return;
 	}
-	if (msg.event === 'message') toast(`[ext] ${msg.params.text}`);
+	if (msg.event === 'message') { toast(`[ext] ${msg.params.text}`); cozyLog('exthost', msg.params.text); }
 	else if (msg.event === 'diagnostics') Panel.setProblems(msg.params.uri, msg.params.items);
+	else if (msg.event === 'contributes') applyContributions(msg.params);
+	else if (msg.event === 'treeReady') { treeReady.add(msg.params.viewId); const b = $(`#ext-views:not(.hidden)`); if (b) { /* a container may be showing this view; refresh */ } }
+	else if (msg.event === 'treeRefresh') { const host = $('#ext-views'); if (host && !host.classList.contains('hidden')) { const active = $('.act-btn.active[data-extview]'); if (active) showExtContainer(active.dataset.extview); } }
 	else if (msg.event === 'loaded') {
 		const active = msg.params.filter(x => x.status === 'activated').length;
+		cozyLog('exthost', `${msg.params.length} extension(s), ${active} activated`);
 		if (active) toast(`Extension host: ${active} extension(s) active`, 2500);
 	}
-	else if (msg.event === 'log') console.log('[ext]', msg.params);
+	else if (msg.event === 'log') cozyLog('exthost', msg.params);
 }
 
 function rpc(method, params, timeout = 4000) {
@@ -290,6 +388,6 @@ async function provideCompletions(model, position) {
 	return { suggestions };
 }
 
-Object.assign(Ext, { renderView, startExtHost, provideCompletions, RECOMMENDED });
+Object.assign(Ext, { renderView, startExtHost, provideCompletions, RECOMMENDED, applyContributions, contributedCommands, runExtCommand: (cmd, ...args) => rpc('executeCommand', { command: cmd, args }, 8000) });
 window.searchExtensions = searchExtensions;
 $('#ext-input').addEventListener('keydown', e => { if (e.key === 'Enter') searchExtensions(); });

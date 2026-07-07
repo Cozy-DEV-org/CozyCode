@@ -26,7 +26,9 @@ const state = {
 // Safety net: a single unhandled error must never silently freeze the whole UI.
 // Surface it instead of leaving the app looking "stuck / can't type".
 window.addEventListener('error', e => {
-	try { console.error('[cozy]', e.error || e.message); toast('Error: ' + (e.message || e.error), 5000); } catch { }
+	// cross-origin script errors (CDN/iframe) surface as opaque "Script error." — ignore noise
+	if (e.message === 'Script error.' || (!e.filename && !e.error)) return;
+	try { console.error('[cozy]', e.error || e.message); } catch { }
 });
 window.addEventListener('unhandledrejection', e => {
 	try { console.error('[cozy] promise', e.reason); } catch { }
@@ -46,12 +48,26 @@ window.addEventListener('keydown', e => {
 
 // ---- Output console: capture logs + app events, shown in the OUTPUT panel ----
 const _logBuf = [];
+const _logSources = new Set();
+function outputFilter() { const s = document.getElementById('output-src'); return s ? s.value : ''; }
 function cozyLog(source, msg, level = 'info') {
 	const time = new Date().toTimeString().slice(0, 8);
-	_logBuf.push({ time, source, msg: String(msg).slice(0, 2000), level });
-	if (_logBuf.length > 1000) _logBuf.shift();
-	const box = document.getElementById('output-log');
-	if (box && !document.getElementById('pane-output').classList.contains('hidden')) appendLog(box, _logBuf[_logBuf.length - 1]);
+	const entry = { time, source, msg: String(msg).slice(0, 2000), level };
+	_logBuf.push(entry);
+	if (_logBuf.length > 2000) _logBuf.shift();
+	if (!_logSources.has(source)) { _logSources.add(source); refreshLogSources(); }
+	const pane = document.getElementById('pane-output');
+	if (pane && !pane.classList.contains('hidden')) {
+		const f = outputFilter();
+		if (!f || f === source) appendLog(document.getElementById('output-log'), entry);
+	}
+}
+function refreshLogSources() {
+	const sel = document.getElementById('output-src');
+	if (!sel) return;
+	const cur = sel.value;
+	sel.innerHTML = '<option value="">All sources</option>' + [..._logSources].sort().map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+	sel.value = cur;
 }
 function appendLog(box, e) {
 	const d = document.createElement('div');
@@ -63,7 +79,8 @@ function appendLog(box, e) {
 function renderOutput() {
 	const box = document.getElementById('output-log');
 	box.innerHTML = '';
-	for (const e of _logBuf) appendLog(box, e);
+	const f = outputFilter();
+	for (const e of _logBuf) if (!f || f === e.source) appendLog(box, e);
 }
 // mirror console.* into the output panel (keep native console too)
 for (const lvl of ['log', 'warn', 'error']) {
@@ -271,8 +288,25 @@ function applyEditorSettings() {
 	});
 }
 
+// string-aware JSONC -> JSON (VS Code theme files are JSONC with // and /* */ and
+// trailing commas). Must not strip // inside string values (e.g. "http://...").
 function stripJsonComments(s) {
-	return s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/,\s*([}\]])/g, '$1');
+	let out = '', inStr = false, esc = false;
+	for (let i = 0; i < s.length; i++) {
+		const c = s[i], n = s[i + 1];
+		if (inStr) {
+			out += c;
+			if (esc) esc = false;
+			else if (c === '\\') esc = true;
+			else if (c === '"') inStr = false;
+			continue;
+		}
+		if (c === '"') { inStr = true; out += c; continue; }
+		if (c === '/' && n === '/') { while (i < s.length && s[i] !== '\n') i++; out += '\n'; continue; }
+		if (c === '/' && n === '*') { i += 2; while (i < s.length && !(s[i] === '*' && s[i + 1] === '/')) i++; i++; continue; }
+		out += c;
+	}
+	return out.replace(/,(\s*[}\]])/g, '$1'); // trailing commas
 }
 
 const CSS_VAR_MAP = {
@@ -840,8 +874,10 @@ function switchView(name) {
 	// click the already-active view button = collapse/expand sidebar (VSCode behavior)
 	if (name === currentView && !sbHidden) { toggleSidebar(); return; }
 	currentView = name;
+	$$('.act-btn').forEach(b => b.classList.remove('active'));
 	$$('.act-btn[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === name));
 	$$('#sidebar .view').forEach(v => v.classList.add('hidden'));
+	const ev = $('#ext-views'); if (ev) ev.classList.add('hidden');
 	$('#view-' + name).classList.remove('hidden');
 	$('#sidebar').style.display = 'flex';
 	$('#sidebar-resizer').style.display = 'block';
@@ -850,6 +886,26 @@ function switchView(name) {
 	if (name === 'extensions') { Ext.renderView(); $('#ext-input').focus(); }
 	if (name === 'remote') Remote.renderView();
 }
+// right-click the activity bar to hide/show view icons (like VSCode)
+function loadHiddenViews() { try { return new Set(JSON.parse(localStorage.getItem('cozyHiddenViews') || '[]')); } catch { return new Set(); } }
+let hiddenViews = loadHiddenViews();
+function applyHiddenViews() {
+	$$('.act-btn[data-view]').forEach(b => b.classList.toggle('hidden', hiddenViews.has(b.dataset.view)));
+}
+function activityBarMenu(x, y) {
+	const labels = { explorer: 'Explorer', search: 'Search', scm: 'Source Control', extensions: 'Extensions', remote: 'Remote SSH' };
+	const items = Object.entries(labels).map(([v, label]) => ({
+		label: (hiddenViews.has(v) ? 'Show ' : 'Hide ') + label,
+		run: () => {
+			hiddenViews.has(v) ? hiddenViews.delete(v) : hiddenViews.add(v);
+			localStorage.setItem('cozyHiddenViews', JSON.stringify([...hiddenViews]));
+			applyHiddenViews();
+			if (hiddenViews.has(v) && currentView === v) switchView('explorer');
+		},
+	}));
+	contextMenu(x, y, items);
+}
+
 function toggleSidebar() {
 	const sb = $('#sidebar'), rz = $('#sidebar-resizer');
 	const hidden = sb.style.display === 'none';
