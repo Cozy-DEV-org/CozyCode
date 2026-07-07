@@ -76,6 +76,8 @@ fn main() {
             sys_cmds::resolve_command,
             sys_cmds::launch_target,
             sys_cmds::register_context_menu,
+            sys_cmds::unregister_context_menu,
+            sys_cmds::install_cli,
             sys_cmds::detect_runtimes,
             sys_cmds::check_update,
             sys_cmds::open_url,

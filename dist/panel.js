@@ -14,10 +14,9 @@ function bindPtyListeners() {
 
 function showPanel(tab) {
 	$('#panel').classList.remove('hidden');
-	$('#panel-resizer').classList.remove('hidden');
 	if (tab) switchPanelTab(tab);
 }
-function hidePanel() { $('#panel').classList.add('hidden'); $('#panel-resizer').classList.add('hidden'); }
+function hidePanel() { $('#panel').classList.add('hidden'); }
 
 function switchPanelTab(name) {
 	$$('.panel-tab').forEach(b => b.classList.toggle('active', b.dataset.panel === name));
@@ -206,79 +205,83 @@ function bindTunnel() {
 	listen('tunnel-log', e => toast(String(e.payload), 4000));
 }
 
+const PILL = {
+	cloudflared: { label: 'Cloudflare', color: '#f38020' },
+	ngrok: { label: 'ngrok', color: '#1f1e37' },
+	tailscale: { label: 'Tailscale', color: '#4b5563' },
+	ssh: { label: 'SSH', color: '#2f855a' },
+};
+function pill(kind) {
+	const p = PILL[kind] || { label: kind, color: '#555' };
+	return `<span class="port-pill" style="background:${p.color}">${esc(p.label)}</span>`;
+}
+
 function renderPorts() {
 	const box = $('#pane-ports');
 	box.innerHTML = '';
 
-	// ---- public tunnel (expose a local port to the internet) ----
-	const th = document.createElement('div');
-	th.className = 'scm-group-title';
-	th.textContent = 'PUBLIC TUNNEL (share a local port)';
-	box.appendChild(th);
-	const tform = document.createElement('div');
-	tform.className = 'ports-form';
+	// ---- add-forward toolbar ----
+	const bar = document.createElement('div');
+	bar.className = 'ports-bar';
 	const prov = state.settings['tunnel.provider'] || 'cloudflared';
-	tform.innerHTML =
-		`<input id="tn-port" type="number" placeholder="Local port" value="3000">` +
+	bar.innerHTML =
+		`<div class="ports-group"><span class="ports-label">Public tunnel</span>` +
+		`<input id="tn-port" type="number" placeholder="Port" value="3000">` +
 		`<select id="tn-prov">${['cloudflared', 'ngrok', 'tailscale'].map(p => `<option ${p === prov ? 'selected' : ''}>${p}</option>`).join('')}</select>` +
-		`<button class="set-btn" id="tn-add">Create Tunnel</button>`;
-	box.appendChild(tform);
-	const tnote = document.createElement('div');
-	tnote.style.cssText = 'padding:2px 12px;color:var(--fg-dim);font-size:11px';
-	tnote.textContent = 'cloudflared = no login needed. ngrok/tailscale need a token in Settings.';
-	box.appendChild(tnote);
+		`<button class="set-btn" id="tn-add">Create</button></div>` +
+		`<div class="ports-group"><span class="ports-label">SSH forward</span>` +
+		`<input id="pf-local" type="number" placeholder="Local" value="3000">` +
+		`<span class="codicon codicon-arrow-left" style="color:var(--fg-dim)"></span>` +
+		`<input id="pf-host" type="text" placeholder="Host" value="localhost">` +
+		`<input id="pf-remote" type="number" placeholder="Remote" value="3000">` +
+		`<button class="set-btn" id="pf-add">Forward</button></div>`;
+	box.appendChild(bar);
 	$('#tn-add').onclick = addTunnel;
-	for (const t of publicTunnels) {
-		const row = document.createElement('div');
-		row.className = 'port-row';
-		row.innerHTML = `<span class="codicon codicon-globe" style="color:#73c991"></span>` +
-			`<span>:${t.port}</span><span class="codicon codicon-arrow-right" style="color:var(--fg-dim)"></span>` +
-			(t.url ? `<a href="${esc(t.url)}" style="color:var(--status)">${esc(t.url)}</a>` : `<span style="color:var(--fg-dim)">starting ${esc(t.provider)}...</span>`);
-		const cp = document.createElement('button');
-		cp.className = 'inline-act'; cp.title = 'Copy URL';
-		cp.innerHTML = '<span class="codicon codicon-copy"></span>';
-		cp.onclick = () => { if (t.url) { navigator.clipboard.writeText(t.url); toast('Copied'); } };
-		const rm = document.createElement('button');
-		rm.className = 'inline-act';
-		rm.innerHTML = '<span class="codicon codicon-close"></span>';
-		rm.onclick = () => { invoke('tunnel_stop', { port: t.port }); publicTunnels.splice(publicTunnels.indexOf(t), 1); renderPorts(); };
-		if (t.url) row.appendChild(cp);
-		row.appendChild(rm);
-		box.appendChild(row);
+	$('#pf-add').onclick = addForward;
+
+	// ---- unified table ----
+	const rows = [
+		...publicTunnels.map(t => ({ kind: t.provider, port: t.port, target: t.url || `starting ${t.provider}...`, url: t.url, live: !!t.url, stop: () => { invoke('tunnel_stop', { port: t.port }); publicTunnels.splice(publicTunnels.indexOf(t), 1); } })),
+		...forwardedPorts.map(p => ({ kind: 'ssh', port: p.local, target: `${p.host}:${p.remote}`, url: `http://localhost:${p.local}`, live: true, stop: () => { invoke('ssh_forward_stop', { localPort: p.local }); forwardedPorts.splice(forwardedPorts.indexOf(p), 1); } })),
+	];
+
+	if (!rows.length) {
+		const e = document.createElement('div');
+		e.className = 'scm-empty';
+		e.textContent = state.remote ? 'No forwarded ports yet.' : 'cloudflared needs no login. ngrok/tailscale need a token in Settings. SSH forward needs an active Remote SSH connection.';
+		box.appendChild(e);
+		return;
 	}
 
-	// ---- SSH port forward (remote -> local) ----
-	const sh = document.createElement('div');
-	sh.className = 'scm-group-title';
-	sh.textContent = 'SSH PORT FORWARD (remote -> local)';
-	box.appendChild(sh);
-	const form = document.createElement('div');
-	form.className = 'ports-form';
-	form.innerHTML =
-		`<input id="pf-local" type="number" placeholder="Local port" value="3000">` +
-		`<span class="codicon codicon-arrow-left" style="color:var(--fg-dim)"></span>` +
-		`<input id="pf-host" type="text" placeholder="Remote host" value="localhost">` +
-		`<input id="pf-remote" type="number" placeholder="Remote port" value="3000">` +
-		`<button class="set-btn" id="pf-add">Forward</button>`;
-	box.appendChild(form);
-	const note = document.createElement('div');
-	note.style.cssText = 'padding:2px 12px;color:var(--fg-dim);font-size:11px';
-	note.textContent = state.remote ? 'Forwarding via active SSH connection' : 'Connect via Remote SSH to forward ports';
-	box.appendChild(note);
-	$('#pf-add').onclick = addForward;
-	for (const p of forwardedPorts) {
-		const row = document.createElement('div');
-		row.className = 'port-row';
-		row.innerHTML = `<span class="codicon codicon-circle-filled"></span>` +
-			`<span>localhost:${p.local}</span><span class="codicon codicon-arrow-right" style="color:var(--fg-dim)"></span><span style="color:var(--fg-dim)">${esc(p.host)}:${p.remote}</span>` +
-			`<a href="http://localhost:${p.local}" style="color:var(--status)">open</a>`;
+	const table = document.createElement('table');
+	table.className = 'ports-table';
+	table.innerHTML = `<thead><tr><th>Type</th><th>Port</th><th>Address</th><th></th></tr></thead>`;
+	const tb = document.createElement('tbody');
+	for (const r of rows) {
+		const tr = document.createElement('tr');
+		tr.innerHTML =
+			`<td>${pill(r.kind)}</td>` +
+			`<td>${r.port}</td>` +
+			`<td>${r.live && r.url ? `<a href="${esc(r.url)}" style="color:var(--status)">${esc(r.target)}</a>` : `<span style="color:var(--fg-dim)">${esc(r.target)}</span>`}</td>`;
+		const act = document.createElement('td');
+		act.className = 'ports-actions';
+		if (r.url && r.live) {
+			const cp = document.createElement('button');
+			cp.className = 'inline-act'; cp.title = 'Copy';
+			cp.innerHTML = '<span class="codicon codicon-copy"></span>';
+			cp.onclick = () => { navigator.clipboard.writeText(r.url); toast('Copied'); };
+			act.appendChild(cp);
+		}
 		const rm = document.createElement('button');
-		rm.className = 'inline-act';
+		rm.className = 'inline-act'; rm.title = 'Stop';
 		rm.innerHTML = '<span class="codicon codicon-close"></span>';
-		rm.onclick = () => { invoke('ssh_forward_stop', { localPort: p.local }); forwardedPorts.splice(forwardedPorts.indexOf(p), 1); renderPorts(); };
-		row.appendChild(rm);
-		box.appendChild(row);
+		rm.onclick = () => { r.stop(); renderPorts(); };
+		act.appendChild(rm);
+		tr.appendChild(act);
+		tb.appendChild(tr);
 	}
+	table.appendChild(tb);
+	box.appendChild(table);
 }
 
 async function addTunnel() {
@@ -318,6 +321,8 @@ function makeVResizer(el) {
 	el.addEventListener('mousedown', e => {
 		e.preventDefault();
 		showPanel();
+		el.classList.add('dragging');
+		document.body.style.cursor = 'ns-resize';
 		const bottom = $('#statusbar').getBoundingClientRect().top;
 		const move = ev => {
 			const z = zoom();
@@ -327,7 +332,10 @@ function makeVResizer(el) {
 			$('#panel').style.height = h + 'px';
 			activeTerm && activeTerm.fit.fit();
 		};
-		const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+		const up = () => {
+			el.classList.remove('dragging'); document.body.style.cursor = '';
+			document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+		};
 		document.addEventListener('mousemove', move);
 		document.addEventListener('mouseup', up);
 	});

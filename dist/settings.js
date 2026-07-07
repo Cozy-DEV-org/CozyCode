@@ -253,6 +253,8 @@ function buildCommands() {
 		{ label: 'Ports: Focus on Ports View', icon: 'plug', run: () => Panel.showPanel('ports') },
 		{ label: 'Remote-SSH: Add New SSH Host', icon: 'add', run: () => Remote.editConn(null) },
 		{ label: 'Accounts: Sign in with GitHub', icon: 'github', run: githubLogin },
+		{ label: "Shell Command: Install 'cozy' command in PATH", icon: 'terminal', run: async () => { try { toast(await invoke('install_cli'), 6000); } catch (e) { toast('Install CLI failed: ' + e); } } },
+		{ label: 'Explorer: Register "Open with CozyCode" menu', icon: 'menu', run: () => invoke('register_context_menu').then(() => toast('Context menu registered')).catch(e => toast(e)) },
 	];
 	if (repo) cmds.push(
 		{ label: 'Git: Checkout branch...', icon: 'git-branch', detail: repo.name, run: () => Git.pickBranch(repo) },
@@ -306,8 +308,40 @@ async function suggestTooling(langId) {
 // commands follow each language's official CLI (node/bun/python/go/cargo/etc.)
 async function runActiveFile() {
 	const tab = findTab(state.active);
+	if (tab && tab.dirty) await saveActive();
+	// framework-aware: if the workspace has package.json scripts (next/nuxt/vite/vue/etc),
+	// offer those first — that's how JS frameworks are actually run.
+	if (state.root && !state.remote) {
+		try {
+			const pkg = JSON.parse(await invoke('read_file', { path: state.root + '\\package.json' }));
+			const scripts = pkg.scripts || {};
+			const keys = Object.keys(scripts);
+			if (keys.length) {
+				const runtime = state.settings['npm.runner'] || 'npm';
+				const items = keys.map(k => ({
+					label: `${runtime} run ${k}`, detail: scripts[k], icon: 'play',
+					run: () => runInTerminal(`${runtime} run ${k}`),
+				}));
+				if (tab && tab.kind === 'file') items.push({ label: 'Run current file', icon: 'file', detail: tab.name, run: () => runFileByLang(tab) });
+				Settings.showPalette(items, `Run script (${pkg.name || basename(state.root)})`);
+				return;
+			}
+		} catch { /* no package.json */ }
+	}
 	if (!tab || tab.kind !== 'file' || !tab.path) { toast('Open a file to run'); return; }
-	if (tab.dirty) await saveActive();
+	return runFileByLang(tab);
+}
+
+function runInTerminal(cmd) {
+	Panel.showPanel('terminal');
+	Panel.newTerminal(false).then(() => setTimeout(() => {
+		const t = Panel.activeTerminal();
+		if (t && t.ptyId) invoke('pty_write', { id: t.ptyId, data: cmd + '\r' });
+	}, 700));
+}
+
+async function runFileByLang(tab) {
+	if (!tab || tab.kind !== 'file' || !tab.path) { toast('Open a file to run'); return; }
 	const rt = state.runtimes || (state.runtimes = await invoke('detect_runtimes').catch(() => ({})));
 	const lang = tab.model.getLanguageId();
 	const file = tab.path;
@@ -637,7 +671,7 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.8.2';
+const APP_VERSION = '0.9.0';
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.
@@ -777,10 +811,12 @@ Object.assign(Settings, {
 	try { renderAccount(); Panel.updateProblemsStatus(); } catch (e) { console.error(e); }
 	try { await restoreTheme(); } catch (e) { console.error(e); }
 
-	// register the "Open with CozyCode" context menu once (non-fatal)
+	// register the "Open with CozyCode" context menu + install CLI once (non-fatal)
 	try {
 		if (!localStorage.getItem('cozyCtxMenu'))
 			invoke('register_context_menu').then(() => localStorage.setItem('cozyCtxMenu', '1')).catch(() => { });
+		if (!localStorage.getItem('cozyCli'))
+			invoke('install_cli').then(() => localStorage.setItem('cozyCli', '1')).catch(() => { });
 	} catch { }
 
 	// launched via "Open with CozyCode" / double-click a file or folder?

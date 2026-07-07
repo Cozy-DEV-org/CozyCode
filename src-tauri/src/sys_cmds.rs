@@ -143,6 +143,74 @@ AddMenu 'HKCU:\Software\Classes\Directory\Background\shell\CozyCode'
     }
 }
 
+// Remove the "Open with CozyCode" context-menu entries (called on uninstall too).
+#[tauri::command]
+pub async fn unregister_context_menu() -> Result<(), String> {
+    let ps = r"Remove-Item -Path 'HKCU:\Software\Classes\*\shell\CozyCode' -Recurse -Force -ErrorAction SilentlyContinue; \
+        Remove-Item -Path 'HKCU:\Software\Classes\Directory\shell\CozyCode' -Recurse -Force -ErrorAction SilentlyContinue; \
+        Remove-Item -Path 'HKCU:\Software\Classes\Directory\Background\shell\CozyCode' -Recurse -Force -ErrorAction SilentlyContinue";
+    crate::util::command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// Install the `cozy` / `cozycode` shell commands so `cozy .` opens the cwd,
+// like VS Code's `code .`. Adds the program dir to PATH and drops shims.
+#[tauri::command]
+pub async fn install_cli() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().ok_or("no parent dir")?.to_path_buf();
+
+    #[cfg(windows)]
+    {
+        // cozy.cmd + cozycode.cmd shims next to the exe (exe is cozycode.exe)
+        let exe_s = exe.to_string_lossy();
+        for name in ["cozy", "cozycode"] {
+            let shim = dir.join(format!("{name}.cmd"));
+            std::fs::write(&shim, format!("@echo off\r\n\"{exe_s}\" %*\r\n")).map_err(|e| e.to_string())?;
+        }
+        // add dir to the user PATH (idempotent) + broadcast the change
+        let dir_s = dir.to_string_lossy().replace('\'', "''");
+        let ps = format!(
+            "$d='{dir_s}'; $p=[Environment]::GetEnvironmentVariable('Path','User'); \
+             if (($p -split ';') -notcontains $d) {{ [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d), 'User') }}"
+        );
+        let out = crate::util::command("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).chars().take(200).collect());
+        }
+        return Ok("Installed 'cozy' and 'cozycode' commands. Open a new terminal to use them.".into());
+    }
+    #[cfg(not(windows))]
+    {
+        // symlink into a bin dir on PATH; prefer /usr/local/bin, fall back to ~/.local/bin
+        let targets = ["/usr/local/bin", &format!("{}/.local/bin", std::env::var("HOME").unwrap_or_default())];
+        for base in targets {
+            let bdir = std::path::Path::new(base);
+            if std::fs::create_dir_all(bdir).is_err() {
+                continue;
+            }
+            let mut ok = false;
+            for name in ["cozy", "cozycode"] {
+                let link = bdir.join(name);
+                let _ = std::fs::remove_file(&link);
+                if std::os::unix::fs::symlink(&exe, &link).is_ok() {
+                    ok = true;
+                }
+            }
+            if ok {
+                return Ok(format!("Installed 'cozy'/'cozycode' to {base} (ensure it's on your PATH)."));
+            }
+        }
+        return Err("could not create symlinks (try running with sufficient permissions)".into());
+    }
+}
+
 // Check the latest published release on GitHub (public API, no auth).
 #[tauri::command]
 pub async fn check_update() -> Result<serde_json::Value, String> {

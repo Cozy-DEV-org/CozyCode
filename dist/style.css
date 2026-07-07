@@ -272,7 +272,11 @@ button.primary:hover { filter: brightness(1.15); }
 #welcome .hint { color: #6a6a6a; margin-top: 12px; }
 
 /* ---------- panel ---------- */
-#panel { height: 240px; border-top: 1px solid var(--border); display: flex; flex-direction: column; background: var(--bg); min-height: 60px; }
+#panel { height: 240px; border-top: 1px solid var(--border); display: flex; flex-direction: column; background: var(--bg); min-height: 60px; position: relative; }
+/* VSCode-style sash: straddles the top edge with a wide invisible hit area */
+#panel-resizer { position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: ns-resize; z-index: 20; }
+#panel-resizer::after { content: ''; position: absolute; top: 3px; left: 0; right: 0; height: 1px; background: transparent; transition: background .1s; }
+#panel-resizer:hover::after, #panel-resizer.dragging::after { background: var(--status); height: 2px; }
 #panel-header { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; flex-shrink: 0; }
 #panel-tabs { display: flex; }
 .panel-tab {
@@ -301,11 +305,11 @@ button.primary:hover { filter: brightness(1.15); }
 .term-tab.drop-target { border-top: 2px solid var(--status); }
 
 /* resizers */
-#sidebar-resizer { width: 4px; cursor: ew-resize; background: transparent; flex-shrink: 0; }
-#sidebar-resizer:hover { background: var(--status); }
-#panel-resizer { height: 4px; cursor: ns-resize; background: transparent; flex-shrink: 0; }
-#panel-resizer:hover { background: var(--status); }
-#panel-open-strip { height: 4px; cursor: ns-resize; flex-shrink: 0; margin-top: -4px; z-index: 50; }
+/* sidebar sash: wide invisible hit area straddling the edge */
+#sidebar-resizer { width: 7px; margin-left: -4px; cursor: ew-resize; background: transparent; flex-shrink: 0; z-index: 20; position: relative; }
+#sidebar-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background .1s; }
+#sidebar-resizer:hover::after { background: var(--status); width: 2px; }
+#panel-open-strip { height: 5px; cursor: ns-resize; flex-shrink: 0; margin-top: -5px; z-index: 50; }
 
 /* problems */
 .prob-file { padding: 3px 12px; font-weight: 600; display: flex; align-items: center; gap: 4px; }
@@ -317,13 +321,20 @@ button.primary:hover { filter: brightness(1.15); }
 .prob-item .dim { color: var(--fg-dim); font-size: 11px; }
 
 /* ports */
-.ports-form { display: flex; gap: 6px; padding: 8px 12px; align-items: center; flex-wrap: wrap; }
-.ports-form input, .ports-form select {
-	background: var(--input); border: 1px solid transparent; color: var(--fg); padding: 4px 6px;
-	font-family: inherit; font-size: 12px; width: 110px; outline: none;
+.ports-bar { display: flex; flex-wrap: wrap; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.ports-group { display: flex; align-items: center; gap: 5px; }
+.ports-label { color: var(--fg-dim); font-size: 11px; margin-right: 2px; }
+.ports-bar input, .ports-bar select {
+	background: var(--input); border: 1px solid transparent; color: var(--fg); padding: 3px 6px;
+	font-family: inherit; font-size: 12px; width: 74px; outline: none; border-radius: 3px;
 }
-.port-row { display: flex; gap: 10px; padding: 4px 12px; align-items: center; }
-.port-row .codicon-circle-filled { color: #73c991; font-size: 10px; }
+.ports-bar input:focus, .ports-bar select:focus { border-color: var(--status); }
+.ports-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ports-table th { text-align: left; color: var(--fg-dim); font-weight: 600; font-size: 11px; padding: 5px 12px; border-bottom: 1px solid var(--border); }
+.ports-table td { padding: 4px 12px; border-bottom: 1px solid rgba(60,60,60,.4); vertical-align: middle; }
+.ports-table tr:hover { background: var(--hover); }
+.ports-table .ports-actions { text-align: right; white-space: nowrap; }
+.port-pill { display: inline-block; color: #fff; border-radius: 10px; padding: 1px 9px; font-size: 10px; font-weight: 600; }
 
 /* ssh view */
 .ssh-item { padding: 6px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
