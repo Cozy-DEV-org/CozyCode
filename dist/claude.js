@@ -8,8 +8,32 @@ const CHAT_SYSTEM =
 	'When you show code, use fenced code blocks. You are given the active file for context when relevant.';
 
 let auxOpen = false, auxMode = 'chat';
-let chatHistory = []; // {role, content}
-let claudeTerm = null, claudeFit = null, claudePty = null, claudeBound = false;
+let chatHistory = []; // {role, content} — current session
+let cliBound = false;
+
+// ---- chat sessions: cache/log/restore all conversations ----
+function loadSessions() { try { return JSON.parse(localStorage.getItem('cozyChatSessions') || '[]'); } catch { return []; } }
+function saveSessions(s) { try { localStorage.setItem('cozyChatSessions', JSON.stringify(s.slice(-40))); } catch { } }
+let sessions = loadSessions();
+let curSessionId = localStorage.getItem('cozyChatCur') || null;
+
+function currentSession() { return sessions.find(s => s.id === curSessionId); }
+function persistCurrent() {
+	let s = currentSession();
+	if (!s) { s = { id: curSessionId || String(Date.now()), title: 'New Chat', history: [] }; curSessionId = s.id; sessions.push(s); localStorage.setItem('cozyChatCur', curSessionId); }
+	s.history = chatHistory;
+	if (chatHistory[0]) s.title = chatHistory[0].content.slice(0, 40) || 'New Chat';
+	saveSessions(sessions);
+}
+function loadSession(id) {
+	const s = sessions.find(x => x.id === id);
+	if (!s) return;
+	curSessionId = id; localStorage.setItem('cozyChatCur', id);
+	chatHistory = s.history.slice();
+	$('#chat-messages').innerHTML = '';
+	for (const m of chatHistory) addMsg(m.role, m.content);
+	updateContext();
+}
 
 function providerCfg() {
 	const provider = state.settings['ai.provider'] || 'anthropic';
@@ -46,8 +70,11 @@ function setMode(mode) {
 	$$('.aux-mode').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
 	$('#aux-chat').classList.toggle('hidden', mode !== 'chat');
 	$('#aux-cli').classList.toggle('hidden', mode !== 'cli');
-	if (mode === 'chat') { updateContext(); $('#chat-input').focus(); }
-	else startClaudeCli();
+	if (mode === 'chat') {
+		// restore the last session's messages if the view is empty
+		if (!$('#chat-messages').childElementCount && currentSession() && currentSession().history.length) loadSession(curSessionId);
+		updateContext(); updateModelLabel(); $('#chat-input').focus();
+	} else startClaudeCli();
 }
 
 /* ---------- context + attachments ---------- */
@@ -117,7 +144,7 @@ function addSelectionToChat() {
 function addMsg(role, content) {
 	const el = document.createElement('div');
 	el.className = 'chat-msg ' + role;
-	const r = document.createElement('div'); r.className = 'role'; r.textContent = role === 'user' ? 'You' : 'Claude';
+	const r = document.createElement('div'); r.className = 'role'; r.textContent = role === 'user' ? 'You' : 'AI';
 	const b = document.createElement('div'); b.className = 'bubble';
 	b.innerHTML = renderMarkdown(content);
 	el.appendChild(r); el.appendChild(b);
@@ -186,11 +213,31 @@ async function sendChat() {
 		});
 		bubble.innerHTML = renderMarkdown(out.trim());
 		chatHistory.push({ role: 'assistant', content: out.trim() });
+		persistCurrent();
 		$('#chat-messages').scrollTop = 1e9;
 	} catch (e) { bubble.innerHTML = renderMarkdown('Error: ' + e); }
+	persistCurrent();
 }
 
-function newChat() { chatHistory = []; attachments = []; $('#chat-messages').innerHTML = ''; renderAttachments(); updateContext(); }
+function newChat() { chatHistory = []; attachments = []; curSessionId = String(Date.now()); localStorage.setItem('cozyChatCur', curSessionId); $('#chat-messages').innerHTML = ''; renderAttachments(); updateContext(); }
+
+function showSessions() {
+	if (auxMode === 'cli') return; // cli sessions handled by tab bar
+	const items = [{ label: 'New Chat', icon: 'add', run: newChat }];
+	for (const s of sessions.slice().reverse()) items.push({ label: s.title || 'Chat', detail: `${s.history.length} msgs`, icon: 'comment', run: () => loadSession(s.id) });
+	Settings.showPalette(items, 'Chat Sessions');
+}
+
+/* ---------- model picker (from the provider's model list) ---------- */
+async function pickModel() {
+	const cfg = providerCfg();
+	toast('Loading models...', 3000);
+	let models = [];
+	try { models = await invoke('ai_models', { baseUrl: cfg.base, apiKey: cfg.key, anthropic: cfg.anthropic }); } catch (e) { /* provider may not list */ }
+	if (!models.length) { models = [cfg.model, 'claude-sonnet-4-5', 'gpt-4o-mini', 'glm-4.6'].filter(Boolean); }
+	Settings.showPalette(models.map(m => ({ label: m, icon: m === cfg.model ? 'check' : 'symbol-misc', run: () => { state.settings['ai.model'] = m; Settings.persistSettings && Settings.persistSettings(); updateModelLabel(); toast('Model: ' + m); } })), 'Select Model');
+}
+function updateModelLabel() { const b = $('#chat-model'); if (b) b.textContent = (providerCfg().model || 'model').split('/').pop().slice(0, 18); }
 
 /* ---------- @ mention autocomplete ---------- */
 let mentionActive = false, mentionSel = 0, mentionItems = [];
@@ -231,42 +278,98 @@ function pickMention(f) {
 	input.focus();
 }
 
-/* ---------- Claude Code CLI ---------- */
+/* ---------- Claude Code CLI: multi-session, keep-alive (restore) ---------- */
+const cliSessions = []; // { id, term, fit, box, ptyId, name }
+let cliActive = null;
+
+function bindCli() {
+	if (cliBound) return;
+	cliBound = true;
+	listen('pty-output', e => { const s = cliSessions.find(s => s.ptyId === e.payload.id); if (s) s.term.write(e.payload.data); });
+	listen('pty-exit', e => { const s = cliSessions.find(s => s.ptyId === e.payload); if (s) { s.term.write('\r\n[claude exited]\r\n'); s.ptyId = null; } });
+}
+
 async function startClaudeCli() {
-	// resolve the real path (claude is a claude.cmd npm shim on Windows)
+	// terminals persist across open/close (restore) — just show existing ones
+	if (cliSessions.length) { setActiveCli(cliActive || cliSessions[0]); renderCliTabs(); return; }
 	const claudePath = await invoke('resolve_command', { name: 'claude' }).catch(() => null);
-	const cli = $('#aux-cli');
 	if (!claudePath) {
-		cli.innerHTML = `<div class="cli-install">
+		$('#cli-terms').innerHTML = `<div class="cli-install">
 			<div class="codicon codicon-sparkle" style="font-size:32px;color:#d98a4b"></div>
 			<div>Claude Code CLI is not installed.</div>
 			<button class="set-btn" id="cli-install-btn">Install Claude Code</button>
 			<div class="desc">Runs: npm i -g @anthropic-ai/claude-code</div>
 		</div>`;
 		$('#cli-install-btn').onclick = installClaude;
+		$('#cli-tabs').innerHTML = '';
 		return;
 	}
-	cli.innerHTML = '<div id="claude-term"></div>';
+	newCliSession(claudePath);
+}
+
+async function newCliSession(claudePath) {
 	if (typeof Terminal === 'undefined') { toast('Terminal lib not loaded'); return; }
-	if (!claudeBound) {
-		claudeBound = true;
-		listen('pty-output', e => { if (e.payload.id === claudePty) claudeTerm.write(e.payload.data); });
-		listen('pty-exit', e => { if (e.payload === claudePty) { claudeTerm && claudeTerm.write('\r\n[claude exited]\r\n'); claudePty = null; } });
+	bindCli();
+	claudePath = claudePath || await invoke('resolve_command', { name: 'claude' }).catch(() => null);
+	if (!claudePath) { toast('Claude Code CLI not found'); return; }
+	const id = Date.now() + Math.floor(Math.random() * 999);
+	const box = document.createElement('div');
+	box.className = 'cli-term';
+	$('#cli-terms').appendChild(box);
+	const term = new Terminal({ fontSize: 12, theme: { background: '#1e1e1e' }, cursorBlink: true });
+	const fit = new FitAddon.FitAddon();
+	term.loadAddon(fit);
+	term.open(box);
+	fit.fit();
+	const sess = { id, term, fit, box, ptyId: null, name: 'claude ' + (cliSessions.length + 1) };
+	cliSessions.push(sess);
+	term.onData(d => sess.ptyId && invoke('pty_write', { id: sess.ptyId, data: d }));
+	term.onResize(({ cols, rows }) => sess.ptyId && invoke('pty_resize', { id: sess.ptyId, cols, rows }));
+	new ResizeObserver(() => { if (cliActive === sess) fit.fit(); }).observe(box);
+	try { sess.ptyId = await invoke('pty_spawn', { cwd: state.root || '', cols: term.cols, rows: term.rows, shell: claudePath, args: null }); }
+	catch (e) { term.write('\r\nFailed to start Claude Code: ' + e + '\r\n'); }
+	setActiveCli(sess);
+	renderCliTabs();
+}
+
+function setActiveCli(sess) {
+	cliActive = sess;
+	cliSessions.forEach(s => s.box.classList.toggle('hidden', s !== sess));
+	sess.fit.fit();
+	sess.term.focus();
+	renderCliTabs();
+}
+
+function killCliSession(sess) {
+	if (sess.ptyId) invoke('pty_kill', { id: sess.ptyId });
+	sess.box.remove();
+	const i = cliSessions.indexOf(sess);
+	cliSessions.splice(i, 1);
+	if (cliActive === sess) { const n = cliSessions[i] || cliSessions[i - 1]; if (n) setActiveCli(n); else cliActive = null; }
+	renderCliTabs();
+	if (!cliSessions.length) startClaudeCli();
+}
+
+function renderCliTabs() {
+	const bar = $('#cli-tabs');
+	bar.innerHTML = '';
+	for (const s of cliSessions) {
+		const t = document.createElement('div');
+		t.className = 'cli-tab' + (s === cliActive ? ' active' : '');
+		t.innerHTML = `<span class="codicon codicon-terminal"></span><span>${esc(s.name)}</span>`;
+		const k = document.createElement('button');
+		k.className = 'cli-kill'; k.title = 'Kill Session';
+		k.innerHTML = '<span class="codicon codicon-trash"></span>';
+		k.onclick = ev => { ev.stopPropagation(); killCliSession(s); };
+		t.appendChild(k);
+		t.onclick = () => setActiveCli(s);
+		bar.appendChild(t);
 	}
-	claudeTerm = new Terminal({ fontSize: 12, theme: { background: '#1e1e1e' }, cursorBlink: true });
-	claudeFit = new FitAddon.FitAddon();
-	claudeTerm.loadAddon(claudeFit);
-	claudeTerm.open($('#claude-term'));
-	claudeFit.fit();
-	claudeTerm.onData(d => claudePty && invoke('pty_write', { id: claudePty, data: d }));
-	claudeTerm.onResize(({ cols, rows }) => claudePty && invoke('pty_resize', { id: claudePty, cols, rows }));
-	new ResizeObserver(() => claudeFit && claudeFit.fit()).observe($('#claude-term'));
-	try {
-		claudePty = await invoke('pty_spawn', { cwd: state.root || '', cols: claudeTerm.cols, rows: claudeTerm.rows, shell: claudePath, args: null });
-	} catch (e) {
-		claudeTerm.write('\r\nFailed to start Claude Code: ' + e + '\r\n');
-	}
-	claudeTerm.focus();
+	const add = document.createElement('button');
+	add.className = 'cli-newtab'; add.title = 'New Claude Code Session';
+	add.innerHTML = '<span class="codicon codicon-add"></span>';
+	add.onclick = () => newCliSession();
+	bar.appendChild(add);
 }
 
 // install Claude Code CLI in a terminal (visible so the user sees npm progress)
@@ -283,11 +386,14 @@ async function installClaude() {
 /* ---------- wiring ---------- */
 $('#tb-claude').onclick = toggleAux;
 $('#aux-close').onclick = closeAux;
-$('#aux-clear').onclick = () => auxMode === 'chat' ? newChat() : (claudePty && invoke('pty_write', { id: claudePty, data: '\x0c' }));
+$('#aux-clear').onclick = () => auxMode === 'chat' ? newChat() : newCliSession();
+$('#aux-sessions').onclick = showSessions;
 $$('.aux-mode').forEach(b => b.onclick = () => setMode(b.dataset.mode));
 $('#chat-send').onclick = sendChat;
 $('#chat-attach').onclick = attachFilePick;
 $('#chat-addsel').onclick = addSelectionToChat;
+$('#chat-model').onclick = pickModel;
+updateModelLabel();
 
 const chatInput = $('#chat-input');
 chatInput.addEventListener('input', () => {
@@ -324,7 +430,7 @@ chatInput.addEventListener('focus', updateContext);
 $('#aux-resizer').addEventListener('mousedown', e => {
 	e.preventDefault();
 	const startX = e.clientX, startW = $('#aux').offsetWidth;
-	const move = ev => { let w = Math.max(240, Math.min(window.innerWidth - 400, startW + (startX - ev.clientX))); $('#aux').style.width = w + 'px'; claudeFit && claudeFit.fit(); };
+	const move = ev => { let w = Math.max(240, Math.min(window.innerWidth - 400, startW + (startX - ev.clientX))); $('#aux').style.width = w + 'px'; cliActive && cliActive.fit.fit(); };
 	const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
 	document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
 });

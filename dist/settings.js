@@ -671,7 +671,7 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.11.0';
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.
@@ -801,7 +801,7 @@ window.addEventListener('keydown', e => {
 
 Object.assign(Settings, {
 	showPalette, commandPalette, openSettings, openKeybindings, pickTheme,
-	generateCommitMessage, createPR, formatFile, formatActive, suggestTooling, aiConfig,
+	generateCommitMessage, createPR, formatFile, formatActive, suggestTooling, aiConfig, persistSettings,
 });
 
 /* ================= startup ================= */
@@ -817,6 +817,9 @@ Object.assign(Settings, {
 			invoke('register_context_menu').then(() => localStorage.setItem('cozyCtxMenu', '1')).catch(() => { });
 		if (!localStorage.getItem('cozyCli'))
 			invoke('install_cli').then(() => localStorage.setItem('cozyCli', '1')).catch(() => { });
+		// one-time import of VS Code extensions (skipped on auto-update via the flag)
+		if (!localStorage.getItem('cozyVscodeImport'))
+			invoke('import_vscode_extensions').then(n => { localStorage.setItem('cozyVscodeImport', '1'); if (n > 0) { toast(`Imported ${n} extension(s) from VS Code`, 5000); Ext.startExtHost(true); } }).catch(() => { });
 	} catch { }
 
 	// launched via "Open with CozyCode" / double-click a file or folder?

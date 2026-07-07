@@ -71,6 +71,53 @@ for (const lvl of ['log', 'warn', 'error']) {
 	console[lvl] = (...a) => { orig(...a); try { cozyLog('console', a.join(' '), lvl === 'log' ? 'info' : lvl); } catch { } };
 }
 
+// links must not navigate the whole app. Ctrl/middle-click -> external browser;
+// plain click -> internal browser tab inside the IDE.
+window.addEventListener('click', e => {
+	const a = e.target.closest && e.target.closest('a[href]');
+	if (!a) return;
+	const href = a.getAttribute('href');
+	if (!href || href.startsWith('#')) return;
+	e.preventDefault();
+	if (!/^https?:\/\//i.test(href)) return;
+	if (e.ctrlKey || e.metaKey) invoke('open_url', { url: href });
+	else openWebTab(href);
+}, true);
+window.addEventListener('auxclick', e => {
+	const a = e.target.closest && e.target.closest('a[href]');
+	if (a && e.button === 1) { e.preventDefault(); const h = a.getAttribute('href'); if (/^https?:/i.test(h)) invoke('open_url', { url: h }); }
+}, true);
+
+// internal browser: an editor tab that shows a URL in an iframe with a small toolbar
+function openWebTab(url) {
+	const key = 'web:' + url;
+	let tab = findTab(key);
+	if (!tab) { tab = { key, kind: 'web', name: url.replace(/^https?:\/\//, '').slice(0, 30), url, dirty: false }; state.tabs.push(tab); }
+	else tab.url = url;
+	activateTab(key);
+}
+function renderWebTab(tab, box) {
+	box.innerHTML = '';
+	const bar = document.createElement('div');
+	bar.className = 'web-bar';
+	bar.innerHTML = `<button class="web-btn" data-a="back" title="Back"><span class="codicon codicon-arrow-left"></span></button>` +
+		`<button class="web-btn" data-a="fwd" title="Forward"><span class="codicon codicon-arrow-right"></span></button>` +
+		`<button class="web-btn" data-a="reload" title="Reload"><span class="codicon codicon-refresh"></span></button>` +
+		`<input class="web-url" value="${esc(tab.url)}">` +
+		`<button class="web-btn" data-a="ext" title="Open in external browser"><span class="codicon codicon-link-external"></span></button>`;
+	const frame = document.createElement('iframe');
+	frame.className = 'web-frame';
+	frame.src = tab.url;
+	bar.querySelector('[data-a=back]').onclick = () => { try { frame.contentWindow.history.back(); } catch { } };
+	bar.querySelector('[data-a=fwd]').onclick = () => { try { frame.contentWindow.history.forward(); } catch { } };
+	bar.querySelector('[data-a=reload]').onclick = () => frame.src = frame.src;
+	bar.querySelector('[data-a=ext]').onclick = () => invoke('open_url', { url: tab.url });
+	const inp = bar.querySelector('.web-url');
+	inp.onkeydown = e => { if (e.key === 'Enter') { let u = inp.value.trim(); if (!/^https?:/i.test(u)) u = 'https://' + u; tab.url = u; frame.src = u; } };
+	box.appendChild(bar);
+	box.appendChild(frame);
+}
+
 // native-looking context menu built from our own components (not the WebView's)
 function contextMenu(x, y, items) {
 	$$('.ctx-menu').forEach(m => m.remove());
@@ -502,8 +549,12 @@ function activateTab(key) {
 	$('#diffeditor').classList.toggle('hidden', !tab || tab.kind !== 'diff');
 	$('#uitab').classList.toggle('hidden', !tab || tab.kind !== 'ui');
 	$('#mediatab').classList.toggle('hidden', !tab || tab.kind !== 'media');
+	$('#webtab').classList.toggle('hidden', !tab || tab.kind !== 'web');
 	if (tab) {
-		if (tab.kind === 'media') {
+		if (tab.kind === 'web') {
+			if ($('#webtab').dataset.key !== tab.key) { renderWebTab(tab, $('#webtab')); $('#webtab').dataset.key = tab.key; }
+			$('#st-lang').textContent = 'web';
+		} else if (tab.kind === 'media') {
 			renderMedia(tab);
 			$('#st-lang').textContent = tab.cat;
 		} else if (tab.kind === 'diff') {
@@ -688,6 +739,7 @@ function renderTabs() {
 		d.className = 'tab' + (t.key === state.active ? ' active' : '') + (t.preview ? ' preview' : '');
 		if (t.kind === 'diff') { const ic = document.createElement('span'); ic.className = 'codicon codicon-diff'; d.appendChild(ic); }
 		else if (t.kind === 'ui') { const ic = document.createElement('span'); ic.className = 'codicon codicon-settings-gear'; d.appendChild(ic); }
+		else if (t.kind === 'web') { const ic = document.createElement('span'); ic.className = 'codicon codicon-globe'; d.appendChild(ic); }
 		else d.appendChild(fileIconImg(t.name));
 		const label = document.createElement('span');
 		label.textContent = t.name;

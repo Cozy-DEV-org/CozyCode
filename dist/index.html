@@ -18,7 +18,7 @@
 		<div id="menubar"></div>
 		<div id="tb-title" data-tauri-drag-region>CozyCode</div>
 		<button id="tb-run" title="Run active file (F5)"><span class="codicon codicon-play"></span></button>
-		<button id="tb-claude" title="Toggle Claude (Ctrl+Shift+A)"><span class="codicon codicon-sparkle"></span> Claude</button>
+		<button id="tb-claude" title="Toggle AI Chat (Ctrl+Shift+A)"><span class="codicon codicon-sparkle"></span> AI Chat</button>
 		<div id="window-controls">
 			<button id="win-min" title="Minimize"><span class="codicon codicon-chrome-minimize"></span></button>
 			<button id="win-max" title="Maximize"><span class="codicon codicon-chrome-maximize"></span></button>
@@ -122,6 +122,7 @@
 				<div id="diffeditor" class="hidden"></div>
 				<div id="uitab" class="hidden"></div>
 				<div id="mediatab" class="hidden"></div>
+				<div id="webtab" class="hidden"></div>
 				<div id="welcome">
 					<h1>CozyCode</h1>
 					<p class="hint">F1 Commands &middot; Ctrl+P Quick Open &middot; Ctrl+` Terminal</p>
@@ -163,7 +164,8 @@
 					<button class="aux-mode" data-mode="cli">Claude Code</button>
 				</div>
 				<div class="view-actions">
-					<button id="aux-clear" title="New chat"><span class="codicon codicon-add"></span></button>
+					<button id="aux-sessions" title="Sessions"><span class="codicon codicon-history"></span></button>
+					<button id="aux-clear" title="New"><span class="codicon codicon-add"></span></button>
 					<button id="aux-close" title="Close"><span class="codicon codicon-close"></span></button>
 				</div>
 			</div>
@@ -172,17 +174,19 @@
 				<div id="chat-attachments"></div>
 				<div id="chat-inputwrap">
 					<div id="mention-pop" class="hidden"></div>
-					<textarea id="chat-input" rows="1" placeholder="Ask Claude  (@ to mention a file, Enter to send)"></textarea>
+					<textarea id="chat-input" rows="1" placeholder="Ask AI  (@ to mention a file, Enter to send)"></textarea>
 					<div id="chat-toolbar">
 						<button id="chat-attach" title="Attach file"><span class="codicon codicon-attach"></span></button>
 						<button id="chat-addsel" title="Add editor selection"><span class="codicon codicon-add"></span></button>
+						<button id="chat-model" title="Select model">model</button>
 						<span id="chat-ctxinfo"></span>
 						<button id="chat-send" title="Send (Enter)"><span class="codicon codicon-send"></span></button>
 					</div>
 				</div>
 			</div>
 			<div id="aux-cli" class="hidden">
-				<div id="claude-term"></div>
+				<div id="cli-tabs"></div>
+				<div id="cli-terms"></div>
 			</div>
 		</div>
 	</div>

@@ -83,6 +83,49 @@ pub struct ExtInfo {
     pub themes: Vec<ThemeContrib>,
 }
 
+// One-time import of installed VS Code extensions into CozyCode's ext dir.
+#[tauri::command]
+pub async fn import_vscode_extensions() -> Result<u32, String> {
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).map_err(|e| e.to_string())?;
+    let src = std::path::Path::new(&home).join(".vscode").join("extensions");
+    if !src.exists() {
+        return Ok(0);
+    }
+    let dest = ext_root()?;
+    let mut n = 0u32;
+    for entry in std::fs::read_dir(&src).map_err(|e| e.to_string())?.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        // VS Code stores each extension as <publisher>.<name>-<version>; keep the id
+        let raw = entry.file_name().to_string_lossy().into_owned();
+        let id: String = raw.rsplitn(2, '-').last().unwrap_or(&raw).to_string();
+        let target = dest.join(sanitize(&id)).join("extension");
+        if target.exists() {
+            continue;
+        }
+        if copy_dir(&p, &target).is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for e in std::fs::read_dir(src)?.flatten() {
+        let from = e.path();
+        let to = dst.join(e.file_name());
+        if from.is_dir() {
+            copy_dir(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
     let root = ext_root()?;

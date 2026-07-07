@@ -16,10 +16,10 @@
 
   ; --- CLI shims: cozy.cmd / cozycode.cmd (PATH is added at runtime by install_cli) ---
   FileOpen $0 "$INSTDIR\cozy.cmd" w
-  FileWrite $0 '@echo off$\r$\n"$INSTDIR\cozycode.exe" %*$\r$\n'
+  FileWrite $0 '@echo off$\r$\nstart "" "$INSTDIR\cozycode.exe" %*$\r$\n'
   FileClose $0
   FileOpen $0 "$INSTDIR\cozycode.cmd" w
-  FileWrite $0 '@echo off$\r$\n"$INSTDIR\cozycode.exe" %*$\r$\n'
+  FileWrite $0 '@echo off$\r$\nstart "" "$INSTDIR\cozycode.exe" %*$\r$\n'
   FileClose $0
 !macroend
 

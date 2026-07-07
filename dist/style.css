@@ -187,10 +187,10 @@ button.primary:hover { filter: brightness(1.15); }
 .scm-sec-header .codicon { font-size: 14px; }
 .scm-sec-count { background: var(--badge); border-radius: 8px; padding: 0 6px; font-size: 10px; margin-left: 4px; }
 .scm-sec-body { display: flex; flex-direction: column; overflow-y: auto; }
-/* height limits so no single section eats the whole panel; scroll instead */
-#scm-repos-list { max-height: 200px; }
-#scm-changes { max-height: 45vh; }
-#scm-graph { max-height: 40vh; }
+/* user-resizable section heights (drag the bottom edge) */
+#scm-repos-list { height: 140px; min-height: 44px; resize: vertical; }
+#scm-changes { height: 300px; min-height: 60px; resize: vertical; }
+#scm-graph { height: 260px; min-height: 60px; resize: vertical; }
 .scm-empty { padding: 6px 12px; color: var(--fg-dim); font-size: 12px; }
 
 .repo-row { display: flex; align-items: center; gap: 5px; padding: 0 8px; height: 22px; cursor: pointer; border-left: 2px solid transparent; }
@@ -209,17 +209,29 @@ button.primary:hover { filter: brightness(1.15); }
 .commit-box .commit-msg { width: 100%; margin: 0; min-height: 26px; padding: 4px 22px 4px 8px; }
 .commit-gen { position: absolute; right: 3px; top: 3px; background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 2px; }
 .commit-gen:hover { color: #fff; }
-.commit-split { display: flex; margin: 0 8px 8px; height: 26px; }
+/* commit split-button: wide Commit + narrow caret, fits width, no x-scroll */
+.commit-split { display: flex; margin: 0 8px 8px; height: 28px; box-sizing: border-box; max-width: calc(100% - 16px); }
 .commit-main {
-	flex: 1; width: auto; height: 26px; border-radius: 2px 0 0 2px; padding: 0;
+	flex: 1 1 auto; min-width: 0; width: auto; height: 28px; border-radius: 2px 0 0 2px; padding: 0;
 	display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px;
 }
 .commit-main .codicon { font-size: 15px; }
 .commit-caret {
-	width: 26px; height: 26px; flex-shrink: 0; border-left: 1px solid rgba(0,0,0,.28);
+	width: 30px; flex: 0 0 30px; height: 28px; border-left: 1px solid rgba(0,0,0,.28);
 	border-radius: 0 2px 2px 0; padding: 0; display: flex; align-items: center; justify-content: center;
 }
 .commit-caret .codicon { font-size: 14px; }
+#view-scm { overflow-x: hidden; }
+.scm-sec-body { overflow-x: hidden; }
+
+/* internal browser tab */
+#webtab { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+.web-bar { display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.web-btn { background: none; border: none; color: var(--fg-dim); cursor: pointer; width: 26px; height: 26px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
+.web-btn:hover { color: #fff; background: var(--hover); }
+.web-url { flex: 1; background: var(--input); border: 1px solid transparent; color: var(--fg); padding: 4px 8px; font-family: inherit; font-size: 12px; outline: none; border-radius: 3px; min-width: 0; }
+.web-url:focus { border-color: var(--status); }
+.web-frame { flex: 1; border: none; width: 100%; background: #fff; }
 #view-scm .scm-item { height: 22px; padding: 0 6px 0 14px; }
 #view-scm .scm-item .scm-act { visibility: visible; }
 #view-scm .scm-group-title { padding: 3px 10px; }
@@ -233,6 +245,11 @@ button.primary:hover { filter: brightness(1.15); }
 .graph-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-tag { background: var(--accent); color: #fff; border-radius: 3px; padding: 0 5px; font-size: 10px; margin-right: 5px; }
 .graph-meta { color: var(--fg-dim); font-size: 11px; white-space: nowrap; }
+.graph-files { padding-left: 18px; }
+.graph-file { display: flex; align-items: center; gap: 5px; height: 20px; padding: 0 10px 0 4px; cursor: pointer; font-size: 12px; }
+.graph-file:hover { background: var(--hover); }
+.graph-file .gf-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-file .scm-letter { width: 14px; text-align: center; font-weight: 600; }
 
 /* ---------- extensions (responsive, no horizontal scroll) ---------- */
 #ext-results { overflow-x: hidden; }
@@ -458,6 +475,16 @@ button.primary:hover { filter: brightness(1.15); }
 #aux-header .view-actions button { background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 2px 4px; }
 #aux-header .view-actions button:hover { color: #fff; }
 #aux-chat, #aux-cli { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#chat-model { background: var(--input) !important; color: var(--fg) !important; font-size: 11px; padding: 0 8px !important; width: auto !important; border-radius: 10px; }
+#chat-model:hover { background: var(--hover) !important; }
+#cli-tabs { display: flex; align-items: center; gap: 2px; padding: 3px 4px; border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto; }
+.cli-tab { display: flex; align-items: center; gap: 4px; padding: 2px 6px; cursor: pointer; font-size: 11px; color: var(--fg-dim); border-radius: 4px; white-space: nowrap; }
+.cli-tab.active { background: var(--hover); color: var(--fg); }
+.cli-tab .codicon { font-size: 12px; }
+.cli-kill, .cli-newtab { background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 0 2px; display: inline-flex; }
+.cli-kill:hover, .cli-newtab:hover { color: #fff; }
+#cli-terms { flex: 1; position: relative; min-height: 0; }
+.cli-term { position: absolute; inset: 0; padding: 4px; }
 #chat-messages { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; }
 .chat-msg { font-size: 13px; line-height: 1.5; }
 .chat-msg.user { color: var(--fg); }

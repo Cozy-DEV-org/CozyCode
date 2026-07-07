@@ -211,6 +211,22 @@ pub async fn git_show_commit(repo: String, hash: String) -> Result<String, Strin
     run_git(&repo, &["show", "--stat", "--patch", &hash])
 }
 
+// files changed in a commit, for the Graph drill-down. Returns [{path, status}].
+#[tauri::command]
+pub async fn git_commit_files(repo: String, hash: String) -> Result<Vec<GitFileStatus>, String> {
+    let out = run_git(&repo, &["show", "--name-status", "--format=", &hash])?;
+    let mut files = Vec::new();
+    for line in out.lines() {
+        let mut parts = line.splitn(2, '\t');
+        let (Some(st), Some(path)) = (parts.next(), parts.next()) else { continue };
+        let status = match st.chars().next().unwrap_or('M') {
+            'A' => "A", 'D' => "D", 'R' => "R", _ => "M",
+        };
+        files.push(GitFileStatus { path: path.to_string(), status: status.into(), staged: true });
+    }
+    Ok(files)
+}
+
 // rev "" = index (stage 0), otherwise e.g. "HEAD" or a commit hash
 #[tauri::command]
 pub async fn git_file_at(repo: String, rev: String, path: String) -> Result<String, String> {

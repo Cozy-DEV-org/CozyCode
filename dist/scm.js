@@ -210,15 +210,40 @@ async function renderGraph(repo) {
 		const tag = i === 0 ? `<span class="graph-tag">${esc(repo.branch)}</span>` : '';
 		row.innerHTML = rail +
 			`<span class="graph-msg">${tag}${esc(c.message)}</span>` +
-			`<span class="graph-meta">${esc(c.author)}, ${esc(c.date)}</span>`;
-		row.title = `${c.short}  ${c.author}\n${c.message}`;
+			`<span class="graph-meta">${esc(c.short)}</span>`;
+		row.title = `${c.short}  ${c.author}, ${c.date}\n${c.message}`;
+		const drop = document.createElement('div');
+		drop.className = 'graph-files hidden';
 		row.onclick = async () => {
-			const text = await invoke('git_show_commit', { repo: repo.path, hash: c.hash });
-			openTextTab(`commit:${c.hash}`, `${c.short} ${c.message.slice(0, 30)}`, text, 'diff');
+			const open = !drop.classList.contains('hidden');
+			drop.classList.toggle('hidden', open);
+			if (open || drop.childElementCount) return;
+			let files = [];
+			try { files = await invoke('git_commit_files', { repo: repo.path, hash: c.hash }); } catch { }
+			if (!files.length) { drop.innerHTML = '<div class="graph-file"><span class="graph-meta">No files</span></div>'; return; }
+			for (const f of files) {
+				const fr = document.createElement('div');
+				fr.className = 'graph-file';
+				fr.appendChild(fileIconImg(basename(f.path)));
+				const nm = document.createElement('span'); nm.className = 'gf-name'; nm.textContent = f.path;
+				const lt = document.createElement('span'); lt.className = `scm-letter letter-${f.status}`; lt.textContent = f.status;
+				fr.appendChild(nm); fr.appendChild(lt);
+				fr.onclick = ev => { ev.stopPropagation(); showCommitFileDiff(repo, c, f.path); };
+				drop.appendChild(fr);
+			}
 		};
 		box.appendChild(row);
+		box.appendChild(drop);
 	});
 	if (!commits.length) box.innerHTML = '<div class="scm-empty">No history</div>';
+}
+
+// show a commit's change to one file as a side-by-side Monaco diff (green/red)
+async function showCommitFileDiff(repo, c, path) {
+	let oldText = '', newText = '';
+	try { oldText = await invoke('git_file_at', { repo: repo.path, rev: c.hash + '^', path }); } catch { /* first commit / added */ }
+	try { newText = await invoke('git_file_at', { repo: repo.path, rev: c.hash, path }); } catch { /* deleted */ }
+	openDiffTab(`cdiff:${c.short}:${path}`, `${basename(path)} @ ${c.short}`, oldText, newText, langOf(path));
 }
 
 function repoMenu(repo) {

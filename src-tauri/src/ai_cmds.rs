@@ -9,6 +9,44 @@ fn sanitize_token(s: &str) -> String {
     s.chars().filter(|c| c.is_ascii_graphic() && *c != '\'' && *c != '"').collect()
 }
 
+// Fetch the model list from the provider so the chat box can offer a picker.
+#[tauri::command]
+pub async fn ai_models(base_url: String, api_key: String, anthropic: bool) -> Result<Vec<String>, String> {
+    let key = sanitize_token(&api_key);
+    if !(base_url.starts_with("http://") || base_url.starts_with("https://")) {
+        return Err("bad base url".into());
+    }
+    let url = sanitize_token(base_url.trim_end_matches('/'));
+    let (endpoint, headers) = if anthropic {
+        (format!("{url}/v1/models"), format!("@{{'x-api-key'='{key}'; 'anthropic-version'='2023-06-01'}}"))
+    } else {
+        (format!("{url}/models"), format!("@{{'Authorization'='Bearer {key}'}}"))
+    };
+    let script = format!(
+        "(Invoke-RestMethod -Uri '{endpoint}' -Headers {headers}).data | ForEach-Object {{ $_.id }} | ConvertTo-Json -Compress"
+    );
+    let out = crate::util::command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).chars().take(200).collect());
+    }
+    let txt = String::from_utf8_lossy(&out.stdout);
+    let txt = txt.trim();
+    if txt.is_empty() {
+        return Ok(vec![]);
+    }
+    // ConvertTo-Json gives a string for one item, array for many
+    if let Ok(v) = serde_json::from_str::<Vec<String>>(txt) {
+        Ok(v)
+    } else if let Ok(s) = serde_json::from_str::<String>(txt) {
+        Ok(vec![s])
+    } else {
+        Ok(vec![])
+    }
+}
+
 // "data:image/png;base64,AAAA" -> ("image/png", "AAAA")
 fn parse_data_url(d: &str) -> Option<(String, String)> {
     let rest = d.strip_prefix("data:")?;

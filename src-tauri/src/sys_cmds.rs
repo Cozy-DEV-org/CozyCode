@@ -173,7 +173,8 @@ pub async fn install_cli() -> Result<String, String> {
         let exe_s = exe.to_string_lossy();
         for name in ["cozy", "cozycode"] {
             let shim = dir.join(format!("{name}.cmd"));
-            std::fs::write(&shim, format!("@echo off\r\n\"{exe_s}\" %*\r\n")).map_err(|e| e.to_string())?;
+            // `start` detaches so the terminal returns immediately (like `code .`)
+            std::fs::write(&shim, format!("@echo off\r\nstart \"\" \"{exe_s}\" %*\r\n")).map_err(|e| e.to_string())?;
         }
         // add dir to the user PATH (idempotent) + broadcast the change
         let dir_s = dir.to_string_lossy().replace('\'', "''");
