@@ -21,9 +21,7 @@ pub fn exthost_start(app: tauri::AppHandle, state: tauri::State<'_, ExtHostState
     if let Some(mut old) = guard.take() {
         let _ = old.child.kill();
     }
-    let appdata = std::env::var("APPDATA").map_err(|e| e.to_string())?;
-    let dir = std::path::PathBuf::from(appdata).join("CozyCode");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dir = crate::util::data_dir();
     let script = dir.join("exthost.js");
     std::fs::write(&script, EXTHOST_JS).map_err(|e| e.to_string())?;
     let ext_dir = if ext_dir.is_empty() {

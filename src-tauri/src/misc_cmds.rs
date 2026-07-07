@@ -3,10 +3,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn settings_path() -> Result<PathBuf, String> {
-    let appdata = std::env::var("APPDATA").map_err(|e| e.to_string())?;
-    let dir = PathBuf::from(appdata).join("CozyCode");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir.join("settings.json"))
+    Ok(crate::util::data_dir().join("settings.json"))
 }
 
 #[tauri::command]

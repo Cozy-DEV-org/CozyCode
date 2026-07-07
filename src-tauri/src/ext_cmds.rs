@@ -6,8 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn ext_root() -> Result<PathBuf, String> {
-    let appdata = std::env::var("APPDATA").map_err(|e| e.to_string())?;
-    let dir = PathBuf::from(appdata).join("CozyCode").join("extensions");
+    let dir = crate::util::data_dir().join("extensions");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
 }

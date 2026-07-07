@@ -74,6 +74,8 @@ fn main() {
             gh_cmds::gh_device_poll,
             sys_cmds::detect_shells,
             sys_cmds::resolve_command,
+            sys_cmds::launch_target,
+            sys_cmds::register_context_menu,
             sys_cmds::check_update,
             sys_cmds::open_url,
             tunnel_cmds::tunnel_start,

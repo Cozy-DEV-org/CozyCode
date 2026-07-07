@@ -450,7 +450,7 @@ function activateTab(key) {
 			if (tab.viewState) state.editor.restoreViewState(tab.viewState);
 			state.editor.focus();
 			$('#st-lang').textContent = tab.model.getLanguageId();
-			if (tab.path) scheduleTimeline(tab.path);
+			if (tab.path) { scheduleTimeline(tab.path); scheduleGutter(tab); }
 		}
 		$('#st-encoding').style.display = tab.kind === 'file' ? '' : 'none';
 		$('#st-encoding').textContent = ENCODING_LABELS[tab.encoding || 'utf8'];
@@ -474,6 +474,46 @@ function scheduleTimeline(path) {
 		const cb = window.requestIdleCallback || (f => setTimeout(f, 1));
 		cb(() => Git.loadTimeline(path));
 	}, 200);
+}
+
+// VSCode-style dirty gutter: colour the margin of added/modified/deleted lines
+// from the file's git diff. Debounced; no spawn when the file isn't in a repo.
+let _gutTimer = null;
+function scheduleGutter(tab) {
+	if (state.remote) return;
+	const repo = Git.repoOf(tab.path);
+	if (!repo) { if (tab._decos && state.editor) tab._decos = state.editor.deltaDecorations(tab._decos, []); return; }
+	clearTimeout(_gutTimer);
+	_gutTimer = setTimeout(async () => {
+		if (findTab(state.active) !== tab) return;
+		let diff = '';
+		try { diff = await invoke('git_diff_file', { repo: repo.path, path: Git.relPath(repo.path, tab.path), staged: false }); } catch { return; }
+		applyGutter(tab, gutterFromDiff(diff));
+	}, 300);
+}
+
+function gutterFromDiff(diff) {
+	const out = [];
+	let nl = 0, pendingDel = 0;
+	for (const line of diff.split('\n')) {
+		const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+		if (h) { nl = +h[1]; pendingDel = 0; continue; }
+		if (nl === 0) continue;
+		if (line.startsWith('+++') || line.startsWith('---')) continue;
+		if (line[0] === '+') { out.push({ line: nl, type: pendingDel > 0 ? 'mod' : 'add' }); if (pendingDel > 0) pendingDel--; nl++; }
+		else if (line[0] === '-') { pendingDel++; out.push({ line: nl, type: 'del' }); }
+		else { nl++; pendingDel = 0; }
+	}
+	return out;
+}
+
+function applyGutter(tab, marks) {
+	if (!state.editor || findTab(state.active) !== tab) return;
+	const decos = marks.map(m => ({
+		range: new monaco.Range(Math.max(1, m.line), 1, Math.max(1, m.line), 1),
+		options: { linesDecorationsClassName: 'gutter-' + m.type },
+	}));
+	tab._decos = state.editor.deltaDecorations(tab._decos || [], decos);
 }
 
 // dispose + splice a tab without prompting (internal)
@@ -570,6 +610,7 @@ async function saveActive() {
 	// format on save
 	if (state.settings['editor.formatOnSave']) await Settings.formatFile(tab.path, tab.model);
 	Git.refreshScm();
+	scheduleGutter(tab);
 	if (state.remote) toast('Saved to remote: ' + tab.name, 1500);
 }
 

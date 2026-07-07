@@ -594,7 +594,7 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.8.0';
 
 // Self-update via the Tauri updater plugin: check GitHub latest.json, download the
 // signed artifact, install, relaunch. Falls back to opening the release page.
@@ -691,6 +691,25 @@ Object.assign(Settings, {
 	renderAccount();
 	Panel.updateProblemsStatus();
 	await restoreTheme();
+
+	// register the "Open with CozyCode" context menu once
+	if (!localStorage.getItem('cozyCtxMenu')) {
+		invoke('register_context_menu').then(() => localStorage.setItem('cozyCtxMenu', '1')).catch(() => { });
+	}
+
+	// launched via "Open with CozyCode" / double-click a file or folder?
+	let target = null;
+	try { target = await invoke('launch_target'); } catch { }
+	if (target && target.path) {
+		if (target.is_dir) await openFolder(target.path);
+		else {
+			// open the file's folder as the workspace, then pin the file
+			await openFolder(dirname(target.path.replace(/\//g, '\\')) || target.path);
+			await openFile(target.path, { preview: false });
+		}
+		return;
+	}
+
 	const last = localStorage.getItem('cozyLastFolder');
 	if (last) { try { await invoke('list_dir', { path: last }); await openFolder(last); } catch { localStorage.removeItem('cozyLastFolder'); } }
 })();

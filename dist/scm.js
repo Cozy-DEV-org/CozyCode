@@ -328,7 +328,6 @@ $$('.scm-sec-header').forEach(h => h.onclick = () => {
 	body.classList.toggle('hidden', hide);
 	h.querySelector('.codicon').className = `codicon codicon-chevron-${hide ? 'right' : 'down'}`;
 });
-$('#btn-scm-commit-all').onclick = () => { const r = activeRepo(); if (r && r._msgEl) { r._msgEl.focus(); } };
 $('#btn-scm-more').onclick = () => { const r = activeRepo(); if (r) repoMenu(r); };
 
 Object.assign(Git, { repoOf, relPath, discoverRepos, updateBranchStatus, loadTimeline, refreshScm, gitNet, pickBranch });

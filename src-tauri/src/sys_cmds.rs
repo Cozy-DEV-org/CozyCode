@@ -55,11 +55,11 @@ pub fn detect_shells() -> Vec<ShellInfo> {
         "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
     ] {
         if exists(gp) {
-            push("Git Bash", gp.to_string(), vec!["--login", "-i"]);
+            push("Git Bash", gp.to_string(), vec!["-i"]);
         }
     }
     if let Some(p) = which("bash.exe").filter(|p| p.to_lowercase().contains("git")) {
-        push("Git Bash", p, vec!["--login", "-i"]);
+        push("Git Bash", p, vec!["-i"]);
     }
     // WSL
     let wsl = format!("{sysroot}\\System32\\wsl.exe");
@@ -82,6 +82,65 @@ pub fn detect_shells() -> Vec<ShellInfo> {
 #[tauri::command]
 pub fn resolve_command(name: String) -> Option<String> {
     which(&name)
+}
+
+// The path passed on the command line (Open with CozyCode / double-click a file).
+// Returns {path, is_dir} or null when launched with no argument.
+#[tauri::command]
+pub fn launch_target() -> Option<serde_json::Value> {
+    let arg = std::env::args().nth(1)?;
+    if arg.starts_with('-') {
+        return None;
+    }
+    let p = Path::new(&arg);
+    if !p.exists() {
+        return None;
+    }
+    let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    // strip Windows \\?\ verbatim prefix
+    let s = abs.to_string_lossy().replace(r"\\?\", "");
+    Some(serde_json::json!({ "path": s, "is_dir": abs.is_dir() }))
+}
+
+// Register HKCU context-menu entries: "Open with CozyCode" on files and folders.
+// currentUser hive => no admin needed. Uninstall by deleting the same keys.
+#[tauri::command]
+pub fn register_context_menu() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe_s = exe.to_string_lossy().replace('\\', "\\\\");
+    let ps = format!(
+        r#"
+$exe = '{exe}'
+function AddMenu($root) {{
+  New-Item -Path $root -Force | Out-Null
+  Set-ItemProperty -Path $root -Name '(Default)' -Value 'Open with CozyCode'
+  Set-ItemProperty -Path $root -Name 'Icon' -Value $exe
+  New-Item -Path "$root\command" -Force | Out-Null
+  Set-ItemProperty -Path "$root\command" -Name '(Default)' -Value ('"' + $exe + '" "%1"')
+}}
+AddMenu 'HKCU:\Software\Classes\*\shell\CozyCode'
+AddMenu 'HKCU:\Software\Classes\Directory\shell\CozyCode'
+AddMenu 'HKCU:\Software\Classes\Directory\Background\shell\CozyCode'
+"#,
+        exe = exe_s
+    );
+    // Background uses %V not %1 — fix that one command
+    let ps = ps.replace(
+        "AddMenu 'HKCU:\\Software\\Classes\\Directory\\Background\\shell\\CozyCode'",
+        "New-Item -Path 'HKCU:\\Software\\Classes\\Directory\\Background\\shell\\CozyCode\\command' -Force | Out-Null; \
+         Set-ItemProperty -Path 'HKCU:\\Software\\Classes\\Directory\\Background\\shell\\CozyCode' -Name '(Default)' -Value 'Open with CozyCode'; \
+         Set-ItemProperty -Path 'HKCU:\\Software\\Classes\\Directory\\Background\\shell\\CozyCode' -Name 'Icon' -Value $exe; \
+         Set-ItemProperty -Path 'HKCU:\\Software\\Classes\\Directory\\Background\\shell\\CozyCode\\command' -Name '(Default)' -Value ('\"' + $exe + '\" \"%V\"')",
+    );
+    let out = crate::util::command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).chars().take(300).collect())
+    }
 }
 
 // Check the latest published release on GitHub (public API, no auth).

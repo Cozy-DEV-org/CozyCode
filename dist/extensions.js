@@ -35,6 +35,30 @@ async function renderView(searchResults) {
 	if (!installed.length) box.appendChild(dim('No extensions installed yet.'));
 	for (const ext of installed) box.appendChild(installedCard(ext));
 
+	// workspace recommendations from .vscode/extensions.json
+	const wr = (state.workspaceRecommend || []).filter(id => !installedIds.has(id));
+	if (wr.length) {
+		box.appendChild(catHeader('WORKSPACE RECOMMENDED'));
+		for (const id of wr) {
+			const card = document.createElement('div');
+			card.className = 'ext-card';
+			card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px;color:var(--fg-dim)"></span>`;
+			const info = document.createElement('div');
+			info.className = 'ext-info';
+			info.innerHTML = `<div class="ext-name">${esc(id)}</div><div class="ext-desc">Recommended by this workspace (.vscode/extensions.json)</div>`;
+			const meta = document.createElement('div');
+			meta.className = 'ext-meta';
+			const btn = document.createElement('button');
+			btn.className = 'ext-btn';
+			btn.textContent = 'Search';
+			btn.onclick = () => { $('#ext-input').value = id.split('.').pop(); searchExtensions(); };
+			meta.appendChild(btn);
+			info.appendChild(meta);
+			card.appendChild(info);
+			box.appendChild(card);
+		}
+	}
+
 	box.appendChild(catHeader('RECOMMENDED'));
 	for (const r of RECOMMENDED) {
 		if (installedIds.has(r.id)) continue;

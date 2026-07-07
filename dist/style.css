@@ -189,9 +189,17 @@ button.primary:hover { filter: brightness(1.15); }
 .commit-box .commit-msg { width: 100%; margin: 0; min-height: 26px; padding: 4px 22px 4px 8px; }
 .commit-gen { position: absolute; right: 3px; top: 3px; background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 2px; }
 .commit-gen:hover { color: #fff; }
-.commit-split { display: flex; margin: 0 8px 6px; }
-.commit-main { flex: 1; border-radius: 2px 0 0 2px; width: auto; padding: 4px; }
-.commit-caret { width: 26px; flex-shrink: 0; border-left: 1px solid rgba(0,0,0,.25); border-radius: 0 2px 2px 0; padding: 4px 0; }
+.commit-split { display: flex; margin: 0 8px 8px; height: 26px; }
+.commit-main {
+	flex: 1; width: auto; height: 26px; border-radius: 2px 0 0 2px; padding: 0;
+	display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px;
+}
+.commit-main .codicon { font-size: 15px; }
+.commit-caret {
+	width: 26px; height: 26px; flex-shrink: 0; border-left: 1px solid rgba(0,0,0,.28);
+	border-radius: 0 2px 2px 0; padding: 0; display: flex; align-items: center; justify-content: center;
+}
+.commit-caret .codicon { font-size: 14px; }
 #view-scm .scm-item { height: 22px; padding: 0 6px 0 14px; }
 #view-scm .scm-item .scm-act { visibility: visible; }
 #view-scm .scm-group-title { padding: 3px 10px; }
@@ -239,6 +247,10 @@ button.primary:hover { filter: brightness(1.15); }
 .tab .close:hover { background: var(--hover); }
 #editor-area { flex: 1; position: relative; min-height: 0; }
 #editor, #diffeditor { position: absolute; inset: 0; }
+/* dirty gutter (git changed lines), VSCode colors */
+.gutter-add { border-left: 3px solid #487e02; margin-left: 3px; }
+.gutter-mod { border-left: 3px solid #1b81a8; margin-left: 3px; }
+.gutter-del { border-left: 3px solid #85272c; margin-left: 3px; }
 #mediatab { position: absolute; inset: 0; overflow: auto; background: var(--bg); display: flex; flex-direction: column; }
 .media-loading { padding: 20px; color: var(--fg-dim); }
 .media-img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; image-rendering: auto; }

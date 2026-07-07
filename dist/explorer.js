@@ -14,10 +14,44 @@ async function openFolder(dir) {
 	$('#explorer-title').textContent = basename(dir).toUpperCase();
 	$('#no-folder').style.display = 'none';
 	await renderTree();
+	await loadWorkspaceConfig(dir);
 	await Git.discoverRepos();
 	Git.refreshScm();
 	Ext.startExtHost();
 	HotExit.restore();
+}
+
+// Interop with other IDEs: read .vscode/settings.json, .editorconfig,
+// .vscode/extensions.json recommendations. .cursor/.claude/.github show in the tree.
+async function loadWorkspaceConfig(dir) {
+	// .vscode/settings.json -> editor settings
+	try {
+		const raw = await FS.readFile(dir + '\\.vscode\\settings.json');
+		const vs = JSON.parse(raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/,\s*([}\]])/g, '$1'));
+		const map = {
+			'editor.tabSize': 'editor.tabSize', 'editor.fontSize': 'editor.fontSize',
+			'editor.wordWrap': 'editor.wordWrap', 'editor.formatOnSave': 'editor.formatOnSave',
+			'editor.fontFamily': 'editor.fontFamily',
+		};
+		let changed = false;
+		for (const k in map) if (vs[k] !== undefined) { state.settings[k] = vs[k]; changed = true; }
+		if (changed) { applyEditorSettings(); toast('Applied .vscode/settings.json', 2000); }
+	} catch { /* none */ }
+
+	// .editorconfig -> indent
+	try {
+		const ec = await FS.readFile(dir + '\\.editorconfig');
+		const size = ec.match(/indent_size\s*=\s*(\d+)/);
+		const style = ec.match(/indent_style\s*=\s*(tab|space)/);
+		if (size) state.settings['editor.tabSize'] = +size[1];
+		applyEditorSettings();
+	} catch { /* none */ }
+
+	// .vscode/extensions.json recommendations -> stash for Extensions view
+	try {
+		const rec = JSON.parse(await FS.readFile(dir + '\\.vscode\\extensions.json'));
+		state.workspaceRecommend = rec.recommendations || [];
+	} catch { state.workspaceRecommend = []; }
 }
 
 function setWindowTitle(name) {
