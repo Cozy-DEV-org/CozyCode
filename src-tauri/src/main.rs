@@ -20,6 +20,16 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            // set the window/taskbar icon explicitly from the new logo
+            if let Ok(img) = tauri::image::Image::from_bytes(include_bytes!("../icons/cozycode.png")) {
+                use tauri::Manager;
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_icon(img);
+                }
+            }
+            Ok(())
+        })
         .manage(pty_cmds::PtyState::default())
         .manage(ssh_cmds::SshState::default())
         .manage(exthost_cmds::ExtHostState::default())

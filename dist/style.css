@@ -20,7 +20,7 @@ body {
 	height: 30px; background: var(--titlebar); color: var(--titlebar-fg);
 	display: flex; align-items: center; flex-shrink: 0; font-size: 12px;
 }
-#tb-logo { margin: 0 8px; pointer-events: none; }
+#tb-logo { width: 18px; height: 18px; object-fit: contain; margin: 0 8px; flex-shrink: 0; pointer-events: none; }
 #menubar { display: flex; height: 100%; }
 .menu-btn {
 	background: none; border: none; color: inherit; padding: 0 9px; height: 100%;
