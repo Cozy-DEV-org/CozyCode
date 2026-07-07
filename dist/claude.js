@@ -72,7 +72,7 @@ function setMode(mode) {
 	$('#aux-cli').classList.toggle('hidden', mode !== 'cli');
 	if (mode === 'chat') {
 		// restore the last session's messages if the view is empty
-		if (!$('#chat-messages').childElementCount && currentSession() && currentSession().history.length) loadSession(curSessionId);
+		if (!$('#chat-messages').childElementCount && currentSession() && currentSession().history?.length) loadSession(curSessionId);
 		updateContext(); updateModelLabel(); $('#chat-input').focus();
 	} else startClaudeCli();
 }
@@ -438,12 +438,16 @@ chatInput.addEventListener('paste', e => {
 });
 chatInput.addEventListener('focus', updateContext);
 
-// resizer (drag left edge)
+// resizer (drag left edge): anchor to the panel's fixed right edge / zoom so the
+// edge tracks the cursor exactly; xterm fit() only on release (expensive per-move)
 $('#aux-resizer').addEventListener('mousedown', e => {
 	e.preventDefault();
-	const startX = e.clientX, startW = $('#aux').offsetWidth;
-	const move = ev => { let w = Math.max(240, Math.min(window.innerWidth - 400, startW + (startX - ev.clientX))); $('#aux').style.width = w + 'px'; cliActive && cliActive.fit.fit(); };
-	const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+	const right = $('#aux').getBoundingClientRect().right;
+	const move = ev => {
+		const z = zoom();
+		$('#aux').style.width = Math.max(240, Math.min((window.innerWidth / z) - 400, (right - ev.clientX) / z)) + 'px';
+	};
+	const up = () => { cliActive && cliActive.fit.fit(); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
 	document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
 });
 

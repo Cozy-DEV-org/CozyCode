@@ -42,7 +42,7 @@ const SETTINGS_DEFS = [
 const AI_PROVIDERS = {
 	anthropic: { base: 'https://api.anthropic.com', anthropic: true, model: 'claude-sonnet-4-5' },
 	openai: { base: 'https://api.openai.com/v1', anthropic: false, model: 'gpt-4o-mini' },
-	openrouter: { base: 'https://openrouter.ai/api/v1', anthropic: false, model: 'anthropic/claude-3.5-sonnet' },
+	openrouter: { base: 'https://openrouter.ai/api/v1', anthropic: false, model: 'openai/gpt-oss-120b:free' },
 	zai: { base: 'https://api.z.ai/api/paas/v4', anthropic: false, model: 'glm-4.6' },
 	groq: { base: 'https://api.groq.com/openai/v1', anthropic: false, model: 'llama-3.3-70b-versatile' },
 	ollama: { base: 'http://localhost:11434/v1', anthropic: false, model: 'qwen2.5-coder' },
@@ -864,4 +864,12 @@ Object.assign(Settings, {
 
 	// check for updates on EVERY launch; toast "up to date" when current
 	try { setTimeout(() => checkForUpdate(null, true, true), 3000); } catch { }
+
+	// titlebar command center (VSCode-style): search pill -> Quick Open, nav arrows
+	$('#tb-search').onclick = () => quickOpen();
+	$('#tb-back').onclick = () => state.editor && state.editor.trigger('tb', 'cursorUndo', null);
+	$('#tb-fwd').onclick = () => state.editor && state.editor.trigger('tb', 'cursorRedo', null);
+	const tbLabel = () => { const n = (state.root || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop(); $('#tb-search-label').textContent = n ? 'Search ' + n : 'Search'; };
+	tbLabel();
+	new MutationObserver(tbLabel).observe($('#explorer-title'), { childList: true, characterData: true, subtree: true });
 })();

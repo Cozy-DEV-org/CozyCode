@@ -322,20 +322,34 @@ const zoom = () => parseFloat(getComputedStyle(document.documentElement).zoom) |
 function makeVResizer(el) {
 	el.addEventListener('mousedown', e => {
 		e.preventDefault();
-		showPanel();
-		el.classList.add('dragging');
-		document.body.style.cursor = 'ns-resize';
+		const startY = e.clientY;
 		const bottom = $('#statusbar').getBoundingClientRect().top;
+		// don't open/resize on a plain click — engage only after real drag movement
+		let engaged = false, raf = 0, lastY = 0;
 		const move = ev => {
-			const z = zoom();
-			let h = (bottom - ev.clientY) / z;
-			if (h < 40) { hidePanel(); return; }
-			h = Math.min((window.innerHeight / z) - 120, h);
-			$('#panel').style.height = h + 'px';
-			activeTerm && activeTerm.fit.fit();
+			lastY = ev.clientY;
+			if (!engaged) {
+				if (Math.abs(ev.clientY - startY) < 4) return;
+				engaged = true;
+				showPanel();
+				el.classList.add('dragging');
+				document.body.style.cursor = 'ns-resize';
+			}
+			// xterm fit() per mousemove is expensive — resize via rAF, fit on release
+			if (raf) return;
+			raf = requestAnimationFrame(() => {
+				raf = 0;
+				const z = zoom();
+				let h = (bottom - lastY) / z;
+				if (h < 40) { hidePanel(); return; }
+				h = Math.min((window.innerHeight / z) - 120, h);
+				$('#panel').style.height = h + 'px';
+			});
 		};
 		const up = () => {
 			el.classList.remove('dragging'); document.body.style.cursor = '';
+			if (raf) { cancelAnimationFrame(raf); raf = 0; }
+			if (engaged) activeTerm && activeTerm.fit.fit();
 			document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
 		};
 		document.addEventListener('mousemove', move);

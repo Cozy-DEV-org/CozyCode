@@ -44,20 +44,28 @@ pub async fn ext_search(query: String) -> Result<String, String> {
 #[tauri::command]
 pub async fn ext_install(namespace: String, name: String, version: String) -> Result<String, String> {
     let (ns, nm, ver) = (sanitize(&namespace), sanitize(&name), sanitize(&version));
-    if ns.is_empty() || nm.is_empty() || ver.is_empty() {
+    if ns.is_empty() || nm.is_empty() {
         return Err("invalid extension id".into());
     }
+    let ver = if ver.is_empty() { "latest".to_string() } else { ver };
     let id = format!("{ns}.{nm}");
     let dest = ext_root()?.join(&id);
     let dest_s = dest.to_string_lossy().into_owned();
-    let url = format!("https://open-vsx.org/api/{ns}/{nm}/{ver}/file/{ns}.{nm}-{ver}.vsix");
-    run_ps(&format!(
-        "$tmp = Join-Path $env:TEMP 'cozyext.zip'; \
-         Invoke-WebRequest -Uri '{url}' -OutFile $tmp; \
+    // Resolve the real .vsix URL from Open VSX metadata instead of building the file
+    // URL by hand: the registry stores namespace/name with their published casing
+    // (e.g. golang.Go, not golang.go) so a hand-built URL 404s. Prefer the win32-x64
+    // build when the extension is platform-specific, else fall back to universal.
+    let script = format!(
+        "$ErrorActionPreference='Stop'; $tmp = Join-Path $env:TEMP 'cozyext.zip'; $dl=$null; \
+         foreach ($u in @('https://open-vsx.org/api/{ns}/{nm}/win32-x64/{ver}','https://open-vsx.org/api/{ns}/{nm}/{ver}')) {{ \
+           try {{ $m = Invoke-RestMethod $u; if ($m.files.download) {{ $dl = $m.files.download; break }} }} catch {{}} }} \
+         if (-not $dl) {{ throw 'Not on Open VSX (this extension may be VS Code Marketplace-only).' }}; \
+         Invoke-WebRequest -Uri $dl -OutFile $tmp; \
          Remove-Item -Recurse -Force '{dest_s}' -ErrorAction SilentlyContinue; \
          Expand-Archive -Path $tmp -DestinationPath '{dest_s}' -Force; \
-         Remove-Item $tmp"
-    ))?;
+         Remove-Item $tmp -ErrorAction SilentlyContinue"
+    );
+    run_ps(&script)?;
     Ok(id)
 }
 
@@ -83,6 +91,7 @@ pub struct ExtInfo {
     pub themes: Vec<ThemeContrib>,
     pub enabled: bool,
     pub auto_update: bool,
+    pub icon: String, // absolute path of the extension's icon image, "" if none
 }
 
 // per-extension state (enabled / auto-update) stored in data/extensions/.state.json
@@ -165,11 +174,14 @@ pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
     let state = read_state();
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())?.flatten() {
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if id.starts_with('.') {
+            continue; // .state.json / partial installs
+        }
         let ext_dir = entry.path().join("extension");
         let pkg_path = ext_dir.join("package.json");
         let Ok(raw) = std::fs::read_to_string(&pkg_path) else { continue };
         let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
-        let id = entry.file_name().to_string_lossy().into_owned();
         let st = &state[&id];
         let mut themes = Vec::new();
         if let Some(arr) = pkg["contributes"]["themes"].as_array() {
@@ -183,6 +195,12 @@ pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
             }
         }
         let display = pkg["displayName"].as_str().unwrap_or(&id);
+        let icon = pkg["icon"]
+            .as_str()
+            .map(|rel| ext_dir.join(rel))
+            .filter(|p| p.exists())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         out.push(ExtInfo {
             id: id.clone(),
             display_name: if display.starts_with('%') { id.clone() } else { display.to_string() },
@@ -191,6 +209,7 @@ pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
             themes,
             enabled: st["enabled"] != serde_json::json!(false), // default enabled
             auto_update: st["autoUpdate"] == serde_json::json!(true),
+            icon,
         });
     }
     Ok(out)

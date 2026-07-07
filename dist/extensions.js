@@ -41,21 +41,8 @@ async function renderView(searchResults) {
 	if (wr.length) {
 		box.appendChild(catHeader('WORKSPACE RECOMMENDED'));
 		for (const id of wr) {
-			const card = document.createElement('div');
-			card.className = 'ext-card';
-			card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px;color:var(--fg-dim)"></span>`;
-			const info = document.createElement('div');
-			info.className = 'ext-info';
-			info.innerHTML = `<div class="ext-name">${esc(id)}</div><div class="ext-desc">Recommended by this workspace (.vscode/extensions.json)</div>`;
-			const meta = document.createElement('div');
-			meta.className = 'ext-meta';
-			const btn = document.createElement('button');
-			btn.className = 'ext-btn';
-			btn.textContent = 'Search';
-			btn.onclick = () => { $('#ext-input').value = id.split('.').pop(); searchExtensions(); };
-			meta.appendChild(btn);
-			info.appendChild(meta);
-			card.appendChild(info);
+			const [card, actions] = extCard({ name: id, desc: 'Recommended by this workspace (.vscode/extensions.json)' });
+			actions.appendChild(extBtn('Search', '', () => { $('#ext-input').value = id.split('.').pop(); searchExtensions(); }));
 			box.appendChild(card);
 		}
 	}
@@ -65,22 +52,8 @@ async function renderView(searchResults) {
 	const recBox = rb;
 	for (const r of RECOMMENDED) {
 		if (installedIds.has(r.id)) continue;
-		const card = document.createElement('div');
-		card.className = 'ext-card';
-		card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px;color:var(--fg-dim)"></span>`;
-		const info = document.createElement('div');
-		info.className = 'ext-info';
-		info.innerHTML = `<div class="ext-name">${esc(r.label)}</div><div class="ext-desc">${esc(r.why)}</div>`;
-		const meta = document.createElement('div');
-		meta.className = 'ext-meta';
-		meta.innerHTML = `<span>${esc(r.id)}</span>`;
-		const btn = document.createElement('button');
-		btn.className = 'ext-btn';
-		btn.textContent = 'Search';
-		btn.onclick = () => { $('#ext-input').value = r.label; searchExtensions(); };
-		meta.appendChild(btn);
-		info.appendChild(meta);
-		card.appendChild(info);
+		const [card, actions] = extCard({ name: r.label, desc: r.why, metaText: r.id });
+		actions.appendChild(extBtn('Search', '', () => { $('#ext-input').value = r.label; searchExtensions(); }));
 		recBox.appendChild(card);
 	}
 }
@@ -106,81 +79,75 @@ function collapsible(title, key) {
 let lastSearch = null;
 function refreshExtView() { renderView(lastSearch); }
 
-function installedCard(ext) {
+// card skeleton: [icon | info(name/desc/meta, ellipsised) | actions column pinned
+// right] — long text can never push the buttons around.
+function extCard({ iconUrl, name, desc, metaText }) {
 	const card = document.createElement('div');
 	card.className = 'ext-card';
-	card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px"></span>`;
+	const ic = document.createElement('div');
+	ic.className = 'ext-icon';
+	ic.innerHTML = `<span class="codicon codicon-extensions"></span>`;
+	if (iconUrl) {
+		const img = document.createElement('img');
+		img.src = iconUrl;
+		img.onload = () => { ic.innerHTML = ''; ic.appendChild(img); };
+	}
 	const info = document.createElement('div');
 	info.className = 'ext-info';
-	info.innerHTML = `<div class="ext-name">${esc(ext.display_name)}</div><div class="ext-desc">${esc(ext.description)}</div>`;
-	const meta = document.createElement('div');
-	meta.className = 'ext-meta';
-	meta.innerHTML = `<span>${esc(ext.id)} v${esc(ext.version)}</span>`;
-	if (!ext.enabled) { card.classList.add('ext-disabled'); meta.querySelector('span').textContent += ' (disabled)'; }
-	// Enable/Disable toggle
-	const toggle = document.createElement('button');
-	toggle.className = 'ext-btn';
-	toggle.textContent = ext.enabled ? 'Disable' : 'Enable';
-	toggle.onclick = async () => {
+	info.innerHTML = `<div class="ext-name">${esc(name)}</div><div class="ext-desc">${esc(desc || '')}</div><div class="ext-meta">${esc(metaText || '')}</div>`;
+	const actions = document.createElement('div');
+	actions.className = 'ext-actions';
+	card.appendChild(ic); card.appendChild(info); card.appendChild(actions);
+	return [card, actions, info];
+}
+const extBtn = (label, cls, onclick) => { const b = document.createElement('button'); b.className = 'ext-btn' + (cls ? ' ' + cls : ''); b.textContent = label; b.onclick = onclick; return b; };
+
+function installedCard(ext) {
+	const [card, actions] = extCard({
+		iconUrl: ext.icon ? window.__TAURI__.core.convertFileSrc(ext.icon) : '',
+		name: ext.display_name, desc: ext.description,
+		metaText: `${ext.id} v${ext.version}${ext.enabled ? '' : ' (disabled)'}`,
+	});
+	if (!ext.enabled) card.classList.add('ext-disabled');
+	actions.appendChild(extBtn(ext.enabled ? 'Disable' : 'Enable', '', async () => {
 		await invoke('ext_set_state', { id: ext.id, enabled: !ext.enabled, autoUpdate: ext.auto_update });
 		toast((ext.enabled ? 'Disabled ' : 'Enabled ') + ext.id);
 		refreshExtView();
 		state.exthostReady = false; startExtHost(true); // restart host to apply
-	};
-	meta.appendChild(toggle);
-	// Auto-update checkbox
+	}));
+	actions.appendChild(extBtn('Uninstall', 'uninstall', async () => {
+		if (!(await confirmDialog('Uninstall ' + ext.id + '?'))) return;
+		await invoke('ext_uninstall', { id: ext.id }); toast('Uninstalled ' + ext.id);
+		refreshExtView(); state.exthostReady = false; startExtHost(true);
+	}));
 	const au = document.createElement('label');
 	au.className = 'ext-auto';
 	au.innerHTML = `<input type="checkbox" ${ext.auto_update ? 'checked' : ''}> auto-update`;
 	au.querySelector('input').onchange = e => invoke('ext_set_state', { id: ext.id, enabled: ext.enabled, autoUpdate: e.target.checked });
-	meta.appendChild(au);
-	const un = document.createElement('button');
-	un.className = 'ext-btn uninstall';
-	un.textContent = 'Uninstall';
-	un.onclick = async () => { if (!(await confirmDialog('Uninstall ' + ext.id + '?'))) return; await invoke('ext_uninstall', { id: ext.id }); toast('Uninstalled ' + ext.id); refreshExtView(); state.exthostReady = false; startExtHost(true); };
-	meta.appendChild(un);
-	for (const th of ext.themes) {
-		const b = document.createElement('button');
-		b.className = 'ext-btn';
-		b.textContent = 'Theme: ' + th.label;
-		b.onclick = () => applyExtTheme(th.path, th.ui_theme, th.label);
-		meta.appendChild(b);
-	}
-	info.appendChild(meta);
-	card.appendChild(info);
+	actions.appendChild(au);
+	for (const th of ext.themes.slice(0, 2)) actions.appendChild(extBtn('Theme: ' + th.label, '', () => applyExtTheme(th.path, th.ui_theme, th.label)));
 	return card;
 }
 
 function marketCard(e, installedIds) {
 	const id = `${e.namespace}.${e.name}`;
-	const card = document.createElement('div');
-	card.className = 'ext-card';
-	if (e.files && e.files.icon) { const img = document.createElement('img'); img.src = e.files.icon; img.onerror = () => img.remove(); card.appendChild(img); }
-	else card.innerHTML = `<span class="codicon codicon-extensions" style="font-size:32px"></span>`;
-	const info = document.createElement('div');
-	info.className = 'ext-info';
-	info.innerHTML = `<div class="ext-name">${esc(e.displayName || e.name)}</div><div class="ext-desc">${esc(e.description || '')}</div>`;
-	const meta = document.createElement('div');
-	meta.className = 'ext-meta';
-	meta.innerHTML = `<span>${esc(id)}</span><span>v${esc(e.version)}</span><span><span class="codicon codicon-cloud-download"></span> ${e.downloadCount || 0}</span>`;
-	const btn = document.createElement('button');
-	btn.className = 'ext-btn';
+	const [card, actions] = extCard({
+		iconUrl: (e.files && e.files.icon) || '',
+		name: e.displayName || e.name, desc: e.description,
+		metaText: `${id} v${e.version} | ${e.downloadCount || 0} downloads`,
+	});
+	const btn = extBtn('Install', '', null);
 	if (installedIds.has(id)) { btn.textContent = 'Installed'; btn.disabled = true; }
-	else {
-		btn.textContent = 'Install';
-		btn.onclick = async () => {
-			btn.disabled = true; btn.textContent = 'Installing...';
-			try {
-				await invoke('ext_install', { namespace: e.namespace, name: e.name, version: e.version });
-				toast(`Installed ${id}`, 4000);
-				refreshExtView();
-				startExtHost();
-			} catch (err) { btn.disabled = false; btn.textContent = 'Install'; toast('Install failed: ' + err); }
-		};
-	}
-	meta.appendChild(btn);
-	info.appendChild(meta);
-	card.appendChild(info);
+	else btn.onclick = async () => {
+		btn.disabled = true; btn.textContent = 'Installing...';
+		try {
+			await invoke('ext_install', { namespace: e.namespace, name: e.name, version: e.version });
+			toast(`Installed ${id}`, 4000);
+			refreshExtView();
+			startExtHost();
+		} catch (err) { btn.disabled = false; btn.textContent = 'Install'; toast('Install failed: ' + err); }
+	};
+	actions.appendChild(btn);
 	return card;
 }
 
@@ -197,33 +164,85 @@ async function searchExtensions() {
 
 /* ============ native adapter: contributed views / commands / trees ============ */
 const contributedCommands = []; // {command, title, category}
-const extContainers = [];       // {id, title, icon, views:[{id,name,ready}]}
+const extContainers = [];       // activitybar (left) {id, title, icon, views:[{id,name,ready}]}
+const secondaryContainers = []; // secondarySidebar (right)
+const panelContainers = [];     // panel (bottom)
 const treeReady = new Set();    // viewIds whose provider registered
 
 const explorerViews = []; // views contributed into the built-in "explorer" container
 const BUILTIN_CONTAINERS = new Set(['explorer', 'scm', 'debug', 'test', 'remote']);
 
+// context keys (extension setContext) drive `when`-clause visibility, like VSCode:
+// Claude Code's left container has when:"claude-code:doesNotSupportSecondarySidebar"
+// so with a secondary sidebar present it must NOT appear on the left.
+let contextKeys = {};
+// ponytail: minimal when-evaluator — !, &&, ||, ==/!= on context keys; no parens
+// (none of the installed extensions' container whens use them). Unknown key = falsy.
+function evalWhen(w) {
+	if (!w) return true;
+	return String(w).split('||').some(part => part.split('&&').every(t => {
+		t = t.trim(); if (!t) return true;
+		let neg = false;
+		while (t.startsWith('!') && !t.includes('=')) { neg = !neg; t = t.slice(1).trim(); }
+		let v;
+		const m = t.match(/^(!?)([\w.:\-\/]+)\s*(==|!=)\s*'?([^']*?)'?$/);
+		if (m) { const eq = String(contextKeys[m[2]] ?? '') === m[4]; v = m[3] === '==' ? eq : !eq; if (m[1]) v = !v; }
+		else v = !!contextKeys[t];
+		return neg ? !v : v;
+	}));
+}
+
+let allContribs = [];
 function applyContributions(list) {
 	for (const c of list || []) {
+		if (!allContribs.some(x => x.id === c.id)) allContribs.push(c);
 		for (const cmd of c.commands || []) if (!contributedCommands.some(x => x.command === cmd.command)) contributedCommands.push(cmd);
-		// only extensions that contribute their OWN activity-bar container get an icon
+	}
+	placeContainers();
+	cozyLog('exthost', `contributions: ${extContainers.length} left, ${secondaryContainers.length} right, ${panelContainers.length} panel container(s), ${explorerViews.length} explorer view(s), ${contributedCommands.length} command(s)`);
+}
+
+// (re)compute container placement from raw contributes + current context keys
+function placeContainers() {
+	extContainers.length = 0; secondaryContainers.length = 0; panelContainers.length = 0; explorerViews.length = 0;
+	for (const c of allContribs) {
 		for (const vc of c.viewsContainers || []) {
-			if (extContainers.some(x => x.id === vc.id)) continue;
-			const views = (c.views || []).filter(v => v.container === vc.id);
-			if (!views.length) continue; // a container with no views = nothing to show
-			extContainers.push({ id: vc.id, title: vc.title || vc.id, icon: vc.icon, views });
+			if (!evalWhen(vc.when)) continue;
+			const bucket = vc.location === 'secondarySidebar' ? secondaryContainers
+				: vc.location === 'panel' ? panelContainers : extContainers;
+			if (bucket.some(x => x.id === vc.id)) continue;
+			const views = (c.views || []).filter(v => v.container === vc.id && evalWhen(v.when));
+			if (!views.length) continue; // a container with no visible views = hidden (VSCode)
+			bucket.push({ id: vc.id, title: vc.title || vc.id, icon: vc.icon, views });
 		}
-		// views placed into the built-in Explorer show up under the file tree (like VSCode).
-		// views in other built-in containers (debug/test/scm) are skipped — we don't fabricate icons.
 		for (const v of (c.views || [])) {
-			if (BUILTIN_CONTAINERS.has(v.container) && v.container === 'explorer' && !explorerViews.some(x => x.id === v.id))
+			if (v.container === 'explorer' && evalWhen(v.when) && !explorerViews.some(x => x.id === v.id))
 				explorerViews.push(v);
 		}
 	}
+	// an extension whose main surface is the secondary sidebar (e.g. Claude Code)
+	// gets its auxiliary LEFT containers hidden by default, like the user's real
+	// VSCode setup — right-click the activity bar to re-enable (choice persists).
+	const defaulted = new Set(JSON.parse(localStorage.getItem('cozyHiddenDefaults') || '[]'));
+	let defChanged = false;
+	for (const c of allContribs) {
+		if (!(c.viewsContainers || []).some(vc => vc.location === 'secondarySidebar' && evalWhen(vc.when))) continue;
+		for (const vc of c.viewsContainers || []) {
+			if (vc.location !== 'activitybar') continue;
+			const key = 'ext:' + vc.id;
+			if (!defaulted.has(key)) { defaulted.add(key); hiddenViews.add(key); defChanged = true; }
+		}
+	}
+	if (defChanged) {
+		localStorage.setItem('cozyHiddenDefaults', JSON.stringify([...defaulted]));
+		localStorage.setItem('cozyHiddenViews', JSON.stringify([...hiddenViews]));
+	}
 	renderExtActivityButtons();
+	renderSecondaryContainers();
+	renderPanelContainers();
 	renderExplorerExtViews();
 	applyHiddenViews();
-	cozyLog('exthost', `contributions: ${extContainers.length} activity-bar container(s), ${explorerViews.length} explorer view(s), ${contributedCommands.length} command(s)`);
+	updateLayoutToggles();
 }
 
 function renderExplorerExtViews() {
@@ -248,43 +267,41 @@ function renderExplorerExtViews() {
 	}
 }
 
-function renderExtActivityButtons() {
-	// add an activity-bar icon per contributed container (once)
-	const bar = $('#activitybar');
-	const spacer = bar.querySelector('.act-spacer');
-	for (const ct of extContainers) {
-		if (bar.querySelector(`[data-extview="${ct.id}"]`)) continue;
-		const b = document.createElement('button');
-		b.className = 'act-btn';
-		b.dataset.extview = ct.id;
-		b.title = ct.title;
-		// use the extension's own icon: $(codicon), an svg/png file, else generic
-		if (typeof ct.icon === 'string' && ct.icon.startsWith('$(')) {
-			b.innerHTML = `<span class="codicon codicon-${esc(ct.icon.slice(2, -1))}"></span>`;
-		} else if (typeof ct.icon === 'string' && ct.icon) {
-			b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
-			invoke('read_file_base64', { path: ct.icon }).then(b64 => {
-				const ext = ct.icon.toLowerCase().split('.').pop();
-				const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'png' ? 'image/png' : 'image/*';
-				b.innerHTML = `<img class="act-ext-icon" src="data:${mime};base64,${b64}">`;
-			}).catch(() => { });
-		} else b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
-		b.onclick = () => showExtContainer(ct.id);
-		bar.insertBefore(b, spacer);
-	}
+// set an activity-bar button's icon from the container's contributed icon
+// ($(codicon), an svg/png file path, else a generic glyph)
+function containerIcon(b, ct) {
+	if (typeof ct.icon === 'string' && ct.icon.startsWith('$(')) {
+		b.innerHTML = `<span class="codicon codicon-${esc(ct.icon.slice(2, -1))}"></span>`;
+	} else if (typeof ct.icon === 'string' && ct.icon) {
+		b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
+		invoke('read_file_base64', { path: ct.icon }).then(b64 => {
+			const ext = ct.icon.toLowerCase().split('.').pop();
+			const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'png' ? 'image/png' : 'image/*';
+			b.innerHTML = `<img class="act-ext-icon" src="data:${mime};base64,${b64}">`;
+		}).catch(() => { });
+	} else b.innerHTML = `<span class="codicon codicon-symbol-misc"></span>`;
 }
 
-function showExtContainer(id) {
-	const ct = extContainers.find(x => x.id === id);
-	if (!ct) return;
-	$$('.act-btn').forEach(b => b.classList.remove('active'));
-	$(`[data-extview="${id}"]`).classList.add('active');
-	$$('#sidebar .view').forEach(v => v.classList.add('hidden'));
-	$('#sidebar').style.display = 'flex'; $('#sidebar-resizer').style.display = 'block';
-	const host = $('#ext-views');
+// persistent per-container hosts (VSCode overlayWebview: webviews are retained,
+// hidden — not destroyed — when the user switches views, so iframe state survives)
+function containerHost(parent, ct, render) {
+	let host = parent.querySelector(`[data-cthost="${CSS.escape(ct.id)}"]`);
+	parent.querySelectorAll('[data-cthost]').forEach(h => h.classList.add('hidden'));
+	if (!host) {
+		host = document.createElement('div');
+		host.dataset.cthost = ct.id;
+		host.className = 'ct-host';
+		parent.appendChild(host);
+		render(host);
+	}
 	host.classList.remove('hidden');
+	return host;
+}
+
+// render a container's views into a host element (single webview fills the pane,
+// otherwise a collapsible section per view). Shared by left/right sidebars.
+function fillContainerHost(host, ct) {
 	host.innerHTML = `<div class="view-title"><span>${esc(ct.title.toUpperCase())}</span></div>`;
-	// if the container has a single webview view, fill the whole panel with it
 	if (ct.views.length === 1 && ct.views[0].type === 'webview') {
 		const body = document.createElement('div');
 		body.className = 'ext-webview-host';
@@ -308,6 +325,130 @@ function showExtContainer(id) {
 	}
 }
 
+function renderExtActivityButtons() {
+	// add an activity-bar icon per contributed container; drop ones whose when-clause
+	// turned false (e.g. Claude Code's left container once the extension sets context)
+	const bar = $('#activitybar');
+	const spacer = bar.querySelector('.act-spacer');
+	bar.querySelectorAll('[data-extview]').forEach(b => { if (!extContainers.some(c => c.id === b.dataset.extview)) b.remove(); });
+	for (const ct of extContainers) {
+		if (bar.querySelector(`[data-extview="${ct.id}"]`)) continue;
+		const b = document.createElement('button');
+		b.className = 'act-btn';
+		b.dataset.extview = ct.id;
+		b.title = ct.title;
+		containerIcon(b, ct);
+		b.onclick = () => showExtContainer(ct.id);
+		bar.insertBefore(b, spacer);
+	}
+}
+
+function showExtContainer(id) {
+	const ct = extContainers.find(x => x.id === id);
+	if (!ct) return;
+	$$('.act-btn').forEach(b => b.classList.remove('active'));
+	$(`[data-extview="${id}"]`).classList.add('active');
+	$$('#sidebar .view').forEach(v => v.classList.add('hidden'));
+	$('#sidebar').style.display = 'flex'; $('#sidebar-resizer').style.display = 'block';
+	const views = $('#ext-views');
+	views.classList.remove('hidden');
+	containerHost(views, ct, h => fillContainerHost(h, ct));
+}
+
+/* ---------- secondary side bar (right) ---------- */
+function renderSecondaryContainers() {
+	const bar = $('#secondary-activitybar');
+	bar.querySelectorAll('[data-secview]').forEach(b => { if (!secondaryContainers.some(c => c.id === b.dataset.secview)) b.remove(); });
+	if (!secondaryContainers.length) { hideSecondary(); return; }
+	for (const ct of secondaryContainers) {
+		if (bar.querySelector(`[data-secview="${ct.id}"]`)) continue;
+		const b = document.createElement('button');
+		b.className = 'act-btn';
+		b.dataset.secview = ct.id;
+		b.title = ct.title;
+		containerIcon(b, ct);
+		b.onclick = () => { $('#secondary-activitybar .act-btn.active')?.dataset.secview === ct.id ? hideSecondary() : showSecondaryContainer(ct.id); };
+		bar.appendChild(b);
+	}
+	// VSCode does not force the secondary side bar open on startup — the titlebar
+	// toggle (and Ctrl+Alt+B) reveals it.
+}
+
+function showSecondaryContainer(id) {
+	const ct = secondaryContainers.find(x => x.id === id);
+	if (!ct) return;
+	$('#secondary-sidebar').classList.remove('hidden');
+	$('#secondary-resizer').classList.remove('hidden');
+	$$('#secondary-activitybar .act-btn').forEach(b => b.classList.toggle('active', b.dataset.secview === id));
+	containerHost($('#secondary-views'), ct, h => fillContainerHost(h, ct));
+}
+
+// hiding only hides (iframes stay alive); the titlebar button brings it back
+function hideSecondary() {
+	$('#secondary-sidebar').classList.add('hidden');
+	$('#secondary-resizer').classList.add('hidden');
+	$$('#secondary-activitybar .act-btn').forEach(b => b.classList.remove('active'));
+}
+function toggleSecondary() {
+	if (!$('#secondary-sidebar').classList.contains('hidden')) return hideSecondary();
+	if (secondaryContainers.length) showSecondaryContainer(secondaryContainers[0].id);
+	else toast('No extension contributes a secondary side bar view');
+}
+
+/* ---------- panel (bottom) containers ---------- */
+function renderPanelContainers() {
+	$$('#panel-tabs .panel-tab').forEach(t => {
+		const id = t.dataset.panel;
+		if (['problems', 'output', 'terminal', 'ports'].includes(id)) return; // built-ins
+		if (!panelContainers.some(c => c.id === id)) { t.remove(); $('#pane-' + id)?.remove(); }
+	});
+	for (const ct of panelContainers) {
+		if ($(`.panel-tab[data-panel="${ct.id}"]`)) continue;
+		const tab = document.createElement('button');
+		tab.className = 'panel-tab';
+		tab.dataset.panel = ct.id;
+		tab.textContent = ct.title.toUpperCase();
+		const pane = document.createElement('div');
+		pane.className = 'pane hidden';
+		pane.id = 'pane-' + ct.id;
+		$('#panel-body').appendChild(pane);
+		// lazy like VSCode: resolve the view only when its tab first becomes visible
+		tab.onclick = () => { showPanel(); switchPanelTab(ct.id); if (!pane.childElementCount) fillContainerHost(pane, ct); };
+		$('#panel-tabs').appendChild(tab);
+	}
+}
+
+// secondary side bar resizer: width = distance from the panel's fixed right edge
+// to the cursor, divided by zoom — keeps the drag edge exactly under the mouse
+// (a start+delta approach drifts when CSS zoom != 1)
+$('#secondary-resizer').addEventListener('mousedown', e => {
+	e.preventDefault();
+	const right = $('#secondary-sidebar').getBoundingClientRect().right;
+	const move = ev => {
+		const z = zoom();
+		$('#secondary-sidebar').style.width = Math.max(200, Math.min((window.innerWidth / z) - 400, (right - ev.clientX) / z)) + 'px';
+	};
+	const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+	document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+});
+/* ---------- titlebar layout toggles (VSCode-style Left / Panel / Right) ---------- */
+// reflect actual visibility: filled icon = visible, -off icon = hidden
+function updateLayoutToggles() {
+	const set = (btn, on, name) => { const el = $(btn); if (el) { el.classList.toggle('on', on); el.querySelector('.codicon').className = `codicon codicon-${name}${on ? '' : '-off'}`; } };
+	set('#tgl-left', $('#sidebar').style.display !== 'none', 'layout-sidebar-left');
+	set('#tgl-panel', !$('#panel').classList.contains('hidden'), 'layout-panel');
+	set('#tgl-right', !$('#secondary-sidebar').classList.contains('hidden'), 'layout-sidebar-right');
+}
+$('#tgl-left').onclick = () => { toggleSidebar(); updateLayoutToggles(); };
+$('#tgl-panel').onclick = () => { const p = $('#panel'); p.classList.contains('hidden') ? Panel.showPanel('terminal') : Panel.hidePanel(); updateLayoutToggles(); };
+$('#tgl-right').onclick = () => toggleSecondary();
+document.addEventListener('keydown', e => { if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSecondary(); } });
+// panels get shown/hidden from many paths (menu, Ctrl+`, close buttons, resizer
+// drag-to-hide) — observe them so the titlebar icons always match reality
+const _ltObs = new MutationObserver(() => updateLayoutToggles());
+for (const sel of ['#panel', '#secondary-sidebar', '#sidebar']) _ltObs.observe($(sel), { attributes: true, attributeFilter: ['class', 'style'] });
+updateLayoutToggles();
+
 /* ---------- webview views (Claude Code / Copilot etc.) ---------- */
 const webviewFrames = new Map(); // viewId -> iframe
 let webviewBound = false;
@@ -315,40 +456,78 @@ function bindWebview() {
 	if (webviewBound) return;
 	webviewBound = true;
 	// extension -> webview
-	listen('webviewToView', e => { const f = webviewFrames.get(e.payload.viewId); if (f && f.contentWindow) f.contentWindow.postMessage(e.payload.msg, '*'); });
-	// live html updates (extension re-sets webview.html)
-	listen('webviewHtml', e => { const f = webviewFrames.get(e.payload.viewId); if (f) f.srcdoc = processWebviewHtml(e.payload.html, e.payload.viewId); });
+	// NOTE: webviewToView/webviewHtml arrive as exthost STDOUT lines routed through
+	// onExtLine (the 'exthost-line' Tauri event) — see the cases there. Nothing
+	// emits Tauri events by those names.
 	// webview -> extension (from the iframe's acquireVsCodeApi().postMessage)
 	window.addEventListener('message', ev => {
 		const d = ev.data;
-		if (d && d.__cozyWv && d.viewId) invoke('exthost_send', { line: JSON.stringify({ method: 'webviewMessage', params: { viewId: d.viewId, msg: d.msg } }) }).catch(() => { });
+		if (!d || !d.__cozyWv || !d.viewId) return;
+		if ((bindWebview._n = (bindWebview._n || 0) + 1) <= 10) cozyLog('webview', `-> ext [${d.viewId}] ${JSON.stringify(d.msg).slice(0, 120)}`);
+		invoke('exthost_send', { line: JSON.stringify({ method: 'webviewMessage', params: { viewId: d.viewId, msg: d.msg } }) })
+			.catch(err => cozyLog('webview', 'exthost_send FAILED: ' + err));
 	});
 }
 
-// inject an acquireVsCodeApi() shim + strip CSP so the iframe can run the ext UI
-function processWebviewHtml(html, viewId) {
-	if (!html) return '<body style="color:#888;font-family:sans-serif;padding:12px">Webview did not provide content.</body>';
-	html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
-	const shim = `<script>(function(){
-		let _state; const _api = { postMessage:function(m){ parent.postMessage({__cozyWv:true, viewId:${JSON.stringify(viewId)}, msg:m}, '*'); }, getState:function(){return _state;}, setState:function(s){_state=s;return s;} };
-		window.acquireVsCodeApi = function(){ return _api; };
-	})();</script>`;
-	return html.includes('</head>') ? html.replace('</head>', shim + '</head>') : shim + html;
-}
+// exthost writes the (shim-injected, CSP-stripped) html to a file; load it via
+// the asset protocol so multi-MB webviews never cross the IPC boundary.
+const toAssetUrl = p => window.__TAURI__.core.convertFileSrc(p) + '?t=' + Date.now();
 
+// a webview provider whose resolveWebviewView never yields (e.g. Flutter's
+// DevTools sidebar busy-waiting for a server it can't reach) freezes the whole
+// extension host. If a resolve times out we mark the view and restart the host so
+// the OTHER extensions recover, and never re-resolve the offending view.
+const hungWebviews = new Set();
+const webviewQueues = new Map();   // viewId -> queued extension->webview messages until iframe ready
+const webviewResolved = new Set(); // viewIds already resolved (never re-run resolveWebviewView; VSCode resolves once)
+async function restartExtHost() {
+	state.rpcWaiters.forEach(fn => { try { fn(null); } catch { } }); state.rpcWaiters.clear();
+	state.exthostReady = false; extHostStarting = null;
+	webviewResolved.clear(); webviewFrames.clear(); webviewQueues.clear();
+	try { await startExtHost(true); } catch { }
+}
+function deliverToWebview(viewId, m) {
+	const f = webviewFrames.get(viewId);
+	if (f && f.dataset.ready === '1' && f.contentWindow) f.contentWindow.postMessage(m, '*');
+	else { if (!webviewQueues.has(viewId)) webviewQueues.set(viewId, []); webviewQueues.get(viewId).push(m); }
+}
+function flushWebviewQueue(viewId) {
+	const f = webviewFrames.get(viewId), q = webviewQueues.get(viewId);
+	if (!f || !f.contentWindow || !q) return;
+	webviewQueues.delete(viewId);
+	cozyLog('webview', `flush ${q.length} queued msg(s) -> [${viewId}]`);
+	for (const m of q) f.contentWindow.postMessage(m, '*');
+}
 async function renderWebviewView(viewId, container) {
 	bindWebview();
-	container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim);padding:8px">Loading...</div>';
+	// like VSCode's overlayWebview: the iframe survives hide/show — if we already
+	// resolved this view, its iframe is still in `container` (hosts are persistent),
+	// so there is nothing to do. Never destroy/re-resolve on reveal.
+	if (webviewResolved.has(viewId) && container.querySelector('iframe')) return;
+	const msg = m => { container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim);padding:8px">' + m + '</div>'; };
+	if (hungWebviews.has(viewId)) return msg('This view could not be loaded.<br>It may require a running server (e.g. Flutter DevTools).');
+	msg('Loading...');
 	let res;
-	try { res = await rpc('resolveWebview', { viewId }, 12000); } catch { res = null; }
+	try { res = await rpc('resolveWebview', { viewId }, 15000); } catch { res = null; }
+	if (res === null) { // timeout: the provider likely froze the host -> recover it
+		hungWebviews.add(viewId);
+		msg('This view could not be loaded (timed out). Restarting extension host...');
+		restartExtHost();
+		return;
+	}
+	if (!res.file) { msg('Webview did not load.'); if (res.error) cozyLog('exthost', 'webview ' + viewId + ': ' + res.error); return; }
 	container.innerHTML = '';
-	if (!res) { container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim);padding:8px">Webview did not load.</div>'; return; }
 	const frame = document.createElement('iframe');
 	frame.className = 'ext-webview';
-	frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
-	frame.srcdoc = processWebviewHtml(res.html, viewId);
+	frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads');
+	frame.dataset.ready = '';
+	frame.dataset.file = res.file;
+	// flush queued extension messages once the document (incl. its scripts) loaded
+	frame.addEventListener('load', () => { frame.dataset.ready = '1'; flushWebviewQueue(viewId); });
+	frame.src = toAssetUrl(res.file);
 	container.appendChild(frame);
 	webviewFrames.set(viewId, frame);
+	webviewResolved.add(viewId);
 	if (res.error) cozyLog('exthost', 'webview ' + viewId + ': ' + res.error);
 }
 
@@ -424,6 +603,20 @@ function onExtLine(line) {
 		if (active) toast(`Extension host: ${active} extension(s) active`, 2500);
 	}
 	else if (msg.event === 'log') cozyLog('exthost', msg.params);
+	// extension setContext -> re-evaluate when-clauses -> re-place containers
+	else if (msg.event === 'contextKeys') { contextKeys = msg.params || {}; placeContainers(); }
+	// extension -> webview message: buffered until the iframe is ready (VSCode
+	// pendingMessages pattern) — see deliverToWebview/flushWebviewQueue
+	else if (msg.event === 'webviewToView') { bindWebview(); deliverToWebview(msg.params.viewId, msg.params.msg); }
+	// live html update (extension re-set webview.html -> exthost rewrote the file);
+	// skip if the iframe already shows this file or a reload would wipe the app
+	else if (msg.event === 'webviewHtml') {
+		const f = webviewFrames.get(msg.params.viewId);
+		if (f && msg.params.file && f.dataset.file !== msg.params.file) {
+			f.dataset.file = msg.params.file; f.dataset.ready = '';
+			f.src = toAssetUrl(msg.params.file);
+		}
+	}
 }
 
 function rpc(method, params, timeout = 4000) {

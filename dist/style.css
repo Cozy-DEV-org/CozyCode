@@ -27,14 +27,30 @@ body {
 	cursor: pointer; font-size: 12px; font-family: inherit;
 }
 .menu-btn:hover, .menu-btn.open { background: rgba(255,255,255,.1); }
-#tb-title { flex: 1; text-align: center; color: var(--fg-dim); overflow: hidden; white-space: nowrap; }
-#tb-claude, #tb-run {
+#tb-title, #tb-title2 { flex: 1; min-width: 20px; }
+/* VSCode command center: nav arrows + a pill-shaped search box centered in the titlebar */
+#tb-back, #tb-fwd { background: none; border: none; color: var(--fg-dim); cursor: pointer; height: 100%; padding: 0 6px; flex-shrink: 0; }
+#tb-back:hover, #tb-fwd:hover { color: var(--fg); background: rgba(255,255,255,.08); }
+#tb-back .codicon, #tb-fwd .codicon { font-size: 14px; }
+#tb-search {
+	display: flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 1;
+	width: 480px; max-width: 38vw; height: 22px; margin: 0 6px;
+	background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); border-radius: 6px;
+	color: var(--fg-dim); font-size: 12px; font-family: inherit; cursor: pointer; overflow: hidden;
+}
+#tb-search:hover { background: rgba(255,255,255,.1); }
+#tb-search .codicon { font-size: 12px; }
+#tb-search-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tb-claude, #tb-run, #layout-toggles button {
 	background: none; border: none; color: var(--fg-dim); cursor: pointer; height: 100%; padding: 0 10px;
 	font-family: inherit; font-size: 12px; display: flex; align-items: center; gap: 4px; flex-shrink: 0;
 }
-#tb-claude:hover, #tb-run:hover { background: rgba(255,255,255,.1); color: var(--fg); }
+#tb-claude:hover, #tb-run:hover, #layout-toggles button:hover { background: rgba(255,255,255,.1); color: var(--fg); }
 #tb-claude.active { color: #d98a4b; }
-#tb-claude .codicon, #tb-run .codicon { font-size: 14px; }
+#layout-toggles { display: flex; align-items: center; height: 100%; flex-shrink: 0; }
+#layout-toggles button { padding: 0 6px; }
+#layout-toggles button.on { color: var(--fg); }
+#tb-claude .codicon, #tb-run .codicon, #layout-toggles .codicon { font-size: 14px; }
 #tb-run:hover .codicon { color: #73c991; }
 .cli-install { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 10px; text-align: center; padding: 20px; color: var(--fg); }
 .cli-install .desc { color: var(--fg-dim); font-size: 11px; }
@@ -262,8 +278,12 @@ button.primary:hover { filter: brightness(1.15); }
 
 /* extension-contributed tree views */
 #ext-views { flex: 1; display: flex; flex-direction: column; overflow-y: auto; min-height: 0; }
-.ext-webview-host { flex: 1; min-height: 300px; display: flex; }
-.ext-webview { flex: 1; width: 100%; border: none; background: #1e1e1e; min-height: 300px; }
+/* persistent per-container hosts: fill the pane, no scrollbars — the webview
+   handles its own scrolling inside the iframe */
+.ct-host { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.ct-host.hidden { display: none; }
+.ext-webview-host { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.ext-webview { flex: 1; width: 100%; height: 100%; border: none; background: #1e1e1e; min-height: 0; }
 .ext-tree-sec { display: flex; flex-direction: column; }
 .ext-tree { overflow-y: auto; }
 .ext-tree-item { display: flex; align-items: center; gap: 4px; height: 22px; cursor: pointer; white-space: nowrap; font-size: 13px; overflow: hidden; }
@@ -275,16 +295,18 @@ button.primary:hover { filter: brightness(1.15); }
 
 /* ---------- extensions (responsive, no horizontal scroll) ---------- */
 #ext-results { overflow-x: hidden; }
-.ext-card { display: flex; gap: 8px; padding: 8px 12px; cursor: default; border-bottom: 1px solid rgba(60,60,60,.4); max-width: 100%; box-sizing: border-box; }
+/* compact rows: icon | text (ellipsised, never wraps) | pinned actions column */
+.ext-card { display: flex; gap: 8px; padding: 5px 10px; cursor: default; border-bottom: 1px solid rgba(60,60,60,.4); max-width: 100%; box-sizing: border-box; align-items: center; }
 .ext-card:hover { background: var(--hover); }
-.ext-card img { width: 36px; height: 36px; object-fit: contain; flex-shrink: 0; }
+.ext-icon { width: 30px; height: 30px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--fg-dim); }
+.ext-icon .codicon { font-size: 24px; }
+.ext-icon img { width: 30px; height: 30px; object-fit: contain; }
 .ext-info { flex: 1; min-width: 0; }
-.ext-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ext-desc { color: var(--fg-dim); font-size: 12px; max-height: 34px; overflow: hidden; word-break: break-word; }
-.ext-meta { color: var(--fg-dim); font-size: 11px; display: flex; gap: 6px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
-.ext-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.ext-meta .ext-btn { flex-shrink: 0; }
-.ext-meta .uninstall { margin-left: auto; }
+.ext-name { font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-desc { color: var(--fg-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-meta { color: var(--fg-dim); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ext-actions { display: flex; flex-direction: column; gap: 3px; align-items: flex-end; flex-shrink: 0; }
+.ext-actions .ext-btn { min-width: 64px; text-align: center; }
 .ext-cat-header { display: flex; align-items: center; gap: 4px; padding: 5px 12px; font-size: 11px; font-weight: 700; color: var(--fg); cursor: pointer; letter-spacing: .3px; }
 .ext-cat-header:hover { background: var(--hover); }
 .ext-cat-header .codicon { font-size: 14px; }
@@ -505,6 +527,19 @@ button.primary:hover { filter: brightness(1.15); }
 #aux-header .view-actions button { background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 2px 4px; }
 #aux-header .view-actions button:hover { color: #fff; }
 #aux-chat, #aux-cli { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+/* secondary side bar (right) — hosts extension containers contributed to secondarySidebar */
+#secondary-resizer { width: 4px; cursor: ew-resize; background: transparent; flex-shrink: 0; }
+#secondary-resizer:hover { background: var(--status); }
+#secondary-resizer.hidden, #secondary-sidebar.hidden { display: none; }
+#secondary-sidebar { width: 340px; min-width: 200px; background: var(--sidebar); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+#secondary-activitybar { display: flex; align-items: center; gap: 4px; height: 35px; padding: 0 8px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+#secondary-activitybar .act-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: var(--fg-dim); cursor: pointer; border-radius: 4px; position: relative; padding: 0; }
+#secondary-activitybar .act-btn:hover { color: var(--fg); background: var(--hover); }
+#secondary-activitybar .act-btn.active { color: #fff; }
+#secondary-activitybar .act-btn.active::after { content: ''; position: absolute; bottom: -1px; left: 4px; right: 4px; height: 2px; background: var(--accent); }
+#secondary-views { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+#secondary-views .view-title { padding: 8px 12px; font-size: 11px; color: var(--fg-dim); text-transform: uppercase; }
 #chat-model { background: var(--input) !important; color: var(--fg) !important; font-size: 11px; padding: 0 8px !important; width: auto !important; border-radius: 10px; }
 #chat-model:hover { background: var(--hover) !important; }
 #cli-tabs { display: flex; align-items: center; gap: 2px; padding: 3px 4px; border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto; }

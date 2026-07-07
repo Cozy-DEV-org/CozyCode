@@ -1,6 +1,6 @@
 [package]
 name = "cozycode"
-version = "0.16.0"
+version = "0.17.0"
 description = "CozyCode — a cozy code editor. Rust + Tauri rework of Code - OSS."
 license = "MIT"
 edition = "2021"
@@ -9,7 +9,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["image-png", "image-ico"] }
+tauri = { version = "2", features = ["image-png", "image-ico", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

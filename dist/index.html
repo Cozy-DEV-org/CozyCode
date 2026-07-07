@@ -16,8 +16,17 @@
 	<div id="titlebar" data-tauri-drag-region>
 		<img id="tb-logo" src="cozycode.png" alt="">
 		<div id="menubar"></div>
-		<div id="tb-title" data-tauri-drag-region>CozyCode</div>
+		<div id="tb-title" data-tauri-drag-region></div>
+		<button id="tb-back" title="Go Back"><span class="codicon codicon-arrow-left"></span></button>
+		<button id="tb-fwd" title="Go Forward"><span class="codicon codicon-arrow-right"></span></button>
+		<button id="tb-search" title="Search files (Ctrl+P)"><span class="codicon codicon-search"></span><span id="tb-search-label">Search</span></button>
+		<div id="tb-title2" data-tauri-drag-region></div>
 		<button id="tb-run" title="Run active file (F5)"><span class="codicon codicon-play"></span></button>
+		<div id="layout-toggles">
+			<button id="tgl-left" title="Toggle Primary Side Bar (Ctrl+B)"><span class="codicon codicon-layout-sidebar-left"></span></button>
+			<button id="tgl-panel" title="Toggle Panel (Ctrl+`)"><span class="codicon codicon-layout-panel-off"></span></button>
+			<button id="tgl-right" title="Toggle Secondary Side Bar (Ctrl+Alt+B)"><span class="codicon codicon-layout-sidebar-right-off"></span></button>
+		</div>
 		<button id="tb-claude" title="Toggle AI Chat (Ctrl+Shift+A)"><span class="codicon codicon-sparkle"></span> AI Chat</button>
 		<div id="window-controls">
 			<button id="win-min" title="Minimize"><span class="codicon codicon-chrome-minimize"></span></button>
@@ -162,6 +171,11 @@
 					<div id="pane-ports" class="pane hidden"></div>
 				</div>
 			</div>
+		</div>
+		<div id="secondary-resizer" class="hidden"></div>
+		<div id="secondary-sidebar" class="hidden">
+			<div id="secondary-activitybar"></div>
+			<div id="secondary-views"></div>
 		</div>
 		<div id="aux-resizer" class="hidden"></div>
 		<div id="aux" class="hidden">

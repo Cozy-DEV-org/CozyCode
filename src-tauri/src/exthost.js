@@ -12,6 +12,11 @@ const extRoot = process.argv[2];
 const send = obj => process.stdout.write(JSON.stringify(obj) + '\n');
 const log = m => send({ event: 'log', params: String(m).slice(0, 500) });
 
+// An extension throwing asynchronously must NOT kill the whole host (which would
+// take down every other extension + IntelliSense). Log and stay alive, like VSCode.
+process.on('uncaughtException', e => { try { log('uncaught: ' + ((e && e.stack) || e)); } catch { } });
+process.on('unhandledRejection', e => { try { log('unhandledRejection: ' + ((e && e.stack) || e)); } catch { } });
+
 /* ---------- minimal vscode API ---------- */
 class Position {
 	constructor(line, character) { this.line = line; this.character = character; }
@@ -43,6 +48,8 @@ const UNIVERSAL = new Proxy(function () {}, {
 	get: (_t, p) => (p === 'then' || typeof p === 'symbol') ? undefined : UNIVERSAL,
 	apply: () => UNIVERSAL,
 	construct: () => UNIVERSAL,
+	// swallow writes so `stub.name = x` (name is read-only on functions) doesn't throw
+	set: () => true, defineProperty: () => true, deleteProperty: () => true,
 });
 const PERMISSIVE = new Proxy({}, {
 	get: (_t, p) => (p === 'then' || typeof p === 'symbol' || p === '__esModule') ? undefined : UNIVERSAL,
@@ -51,6 +58,7 @@ const permObj = o => Object.assign(Object.create(PERMISSIVE), o);
 
 const completionProviders = []; // { selector, provider }
 const commands = new Map();
+const contextKeys = {}; // set via executeCommand('setContext', k, v); drives when-clauses
 const diagCollections = [];
 const treeProviders = new Map(); // viewId -> provider
 const treeItemCache = new Map(); // nodeKey -> element (so clicks can resolve back)
@@ -65,6 +73,74 @@ function fileToDataUri(p) {
 		const mime = MIME[ext] || 'application/octet-stream';
 		return `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
 	} catch { return ''; }
+}
+
+// asWebviewUri must return a real URL (not a data: URI) or the extension's React
+// app can't code-split: dynamic import()/webpack chunks resolve relative to the
+// document origin, and a data: origin is opaque -> chunks 404 -> only the shell
+// renders. Map the file to Tauri's asset protocol (same origin as the iframe's
+// html file), so both static resources and lazy chunks load. Matches the format
+// of window.__TAURI__.core.convertFileSrc (proven: the html file loads this way).
+const ASSET_BASE = process.platform === 'win32' ? 'http://asset.localhost/' : 'asset://localhost/';
+function assetUrl(p) { return ASSET_BASE + encodeURIComponent(path.normalize(String(p))); }
+
+// Webview html can be multi-MB (all resources inlined as data URIs). Shipping it
+// through the IPC event pipe stalls/overflows, so write it to a file the frontend
+// loads via the asset protocol instead. Also strip CSP + inject the vscode API shim.
+const WEBVIEW_DIR = path.join(path.dirname(extRoot), 'webviews');
+
+// VSCode injects the current theme as --vscode-* CSS variables onto the webview's
+// documentElement; extension UIs style everything with them (dropdown/menu/input
+// backgrounds...). Without them var() resolves empty -> transparent popovers.
+// ponytail: curated Dark+ subset covering the widely used vars, not all 700.
+const VSCODE_THEME_CSS = `<style id="cozy-vscode-theme">:root{
+--vscode-font-family:"Segoe WPC","Segoe UI",sans-serif;--vscode-font-size:13px;--vscode-font-weight:normal;
+--vscode-editor-font-family:Consolas,"Courier New",monospace;--vscode-editor-font-size:14px;
+--vscode-foreground:#cccccc;--vscode-descriptionForeground:#9d9d9d;--vscode-errorForeground:#f48771;--vscode-disabledForeground:#888;
+--vscode-focusBorder:#007fd4;--vscode-contrastBorder:transparent;--vscode-widget-border:#454545;
+--vscode-editor-background:#1e1e1e;--vscode-editor-foreground:#cccccc;--vscode-editorWidget-background:#252526;--vscode-editorWidget-foreground:#cccccc;--vscode-editorWidget-border:#454545;
+--vscode-sideBar-background:#181818;--vscode-sideBar-foreground:#cccccc;--vscode-sideBar-border:#2b2b2b;--vscode-sideBarTitle-foreground:#bbbbbb;--vscode-sideBarSectionHeader-background:#00000000;--vscode-sideBarSectionHeader-foreground:#cccccc;
+--vscode-panel-background:#181818;--vscode-panel-border:#2b2b2b;
+--vscode-dropdown-background:#313131;--vscode-dropdown-foreground:#cccccc;--vscode-dropdown-border:#3c3c3c;--vscode-dropdown-listBackground:#252526;
+--vscode-input-background:#313131;--vscode-input-foreground:#cccccc;--vscode-input-border:#3c3c3c;--vscode-input-placeholderForeground:#888888;
+--vscode-inputOption-activeBackground:#2489db82;--vscode-inputOption-activeBorder:#007acc;--vscode-inputOption-activeForeground:#ffffff;
+--vscode-button-background:#0e639c;--vscode-button-foreground:#ffffff;--vscode-button-hoverBackground:#1177bb;--vscode-button-border:transparent;
+--vscode-button-secondaryBackground:#3a3d41;--vscode-button-secondaryForeground:#ffffff;--vscode-button-secondaryHoverBackground:#45494e;
+--vscode-badge-background:#4d4d4d;--vscode-badge-foreground:#ffffff;
+--vscode-list-hoverBackground:#2a2d2e;--vscode-list-hoverForeground:#cccccc;--vscode-list-activeSelectionBackground:#04395e;--vscode-list-activeSelectionForeground:#ffffff;--vscode-list-inactiveSelectionBackground:#37373d;--vscode-list-focusBackground:#04395e;--vscode-list-focusForeground:#ffffff;--vscode-list-highlightForeground:#2aaaff;--vscode-list-focusOutline:#007fd4;
+--vscode-menu-background:#252526;--vscode-menu-foreground:#cccccc;--vscode-menu-border:#454545;--vscode-menu-selectionBackground:#04395e;--vscode-menu-selectionForeground:#ffffff;--vscode-menu-separatorBackground:#454545;
+--vscode-quickInput-background:#252526;--vscode-quickInput-foreground:#cccccc;--vscode-quickInputTitle-background:#ffffff1b;--vscode-quickInputList-focusBackground:#04395e;--vscode-quickInputList-focusForeground:#ffffff;
+--vscode-widget-shadow:#0000005c;--vscode-scrollbar-shadow:#000000;
+--vscode-scrollbarSlider-background:#79797966;--vscode-scrollbarSlider-hoverBackground:#646464b3;--vscode-scrollbarSlider-activeBackground:#bfbfbf66;
+--vscode-textLink-foreground:#3794ff;--vscode-textLink-activeForeground:#3794ff;--vscode-textCodeBlock-background:#0a0a0a66;--vscode-textBlockQuote-background:#7f7f7f1a;--vscode-textBlockQuote-border:#007acc80;--vscode-textPreformat-foreground:#d7ba7d;--vscode-textPreformat-background:#ffffff1a;--vscode-textSeparator-foreground:#ffffff2e;
+--vscode-toolbar-hoverBackground:#5a5d5e50;--vscode-toolbar-activeBackground:#63666750;
+--vscode-icon-foreground:#c5c5c5;--vscode-keybindingLabel-background:#8080802b;--vscode-keybindingLabel-foreground:#cccccc;--vscode-keybindingLabel-border:#33333399;--vscode-keybindingLabel-bottomBorder:#44444499;
+--vscode-checkbox-background:#313131;--vscode-checkbox-foreground:#cccccc;--vscode-checkbox-border:#3c3c3c;
+--vscode-progressBar-background:#0e70c0;
+--vscode-notifications-background:#252526;--vscode-notifications-foreground:#cccccc;--vscode-notifications-border:#303031;
+--vscode-editorHoverWidget-background:#252526;--vscode-editorHoverWidget-foreground:#cccccc;--vscode-editorHoverWidget-border:#454545;
+--vscode-editorGroup-border:#444444;--vscode-tab-activeBackground:#1e1e1e;--vscode-tab-activeForeground:#ffffff;--vscode-tab-inactiveBackground:#2d2d2d;--vscode-tab-inactiveForeground:#ffffff80;
+--vscode-banner-background:#04395e;--vscode-banner-foreground:#cccccc;--vscode-banner-iconForeground:#3794ff;
+--vscode-charts-blue:#3794ff;--vscode-charts-red:#f14c4c;--vscode-charts-green:#89d185;--vscode-charts-yellow:#cca700;--vscode-charts-orange:#d18616;--vscode-charts-purple:#b180d7;--vscode-charts-foreground:#cccccc;--vscode-charts-lines:#cccccc80;
+--vscode-terminal-background:#181818;--vscode-terminal-foreground:#cccccc;
+}
+body{color:var(--vscode-foreground);font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);}
+</style>`;
+
+function processWebviewHtml(html, viewId) {
+	if (!html) return '<body style="color:#888;font-family:sans-serif;padding:12px">Webview provided no content.</body>';
+	html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
+	const shim = VSCODE_THEME_CSS + `<script>(function(){var _s;var _api={postMessage:function(m){parent.postMessage({__cozyWv:true,viewId:${JSON.stringify(viewId)},msg:m},'*');},getState:function(){return _s;},setState:function(s){_s=s;return s;}};window.acquireVsCodeApi=function(){return _api;};
+document.addEventListener('DOMContentLoaded',function(){document.body.classList.add('vscode-dark');document.body.dataset.vscodeThemeKind='vscode-dark';document.body.dataset.vscodeThemeName='Dark+';});})();</script>`;
+	return html.includes('</head>') ? html.replace('</head>', shim + '</head>') : shim + html;
+}
+function writeWebviewFile(viewId, html) {
+	try {
+		fs.mkdirSync(WEBVIEW_DIR, { recursive: true });
+		const file = path.join(WEBVIEW_DIR, String(viewId).replace(/[^a-zA-Z0-9_.-]/g, '_') + '.html');
+		fs.writeFileSync(file, processWebviewHtml(html, viewId));
+		return file;
+	} catch (e) { log('webview write error: ' + e.message); return ''; }
 }
 
 /* ---------- real LSP client (IntelliSense) ---------- */
@@ -175,25 +251,45 @@ function selectorMatches(sel, languageId) {
 	return true;
 }
 
+// vscode.Uri shim with the real methods extensions rely on (.with/.toString/.toJSON).
+// Missing .with() crashed extensions (e.g. Dart DevTools EnvUtils.exposeUrl).
+const UriProto = {
+	with(c) {
+		c = c || {};
+		const scheme = c.scheme != null ? c.scheme : this.scheme, p = c.path != null ? c.path : this.path;
+		return mkUri({ scheme, authority: c.authority != null ? c.authority : this.authority, path: p, query: c.query != null ? c.query : this.query, fragment: c.fragment != null ? c.fragment : this.fragment, fsPath: scheme === 'file' ? String(p).replace(/\//g, path.sep) : this.fsPath });
+	},
+	toString() { return (this.scheme || 'file') + '://' + (this.authority || '') + (this.path && !this.path.startsWith('/') && (this.scheme === 'file') ? '/' : '') + this.path + (this.query ? '?' + this.query : '') + (this.fragment ? '#' + this.fragment : ''); },
+	toJSON() { return { $mid: 1, scheme: this.scheme, authority: this.authority, path: this.path, query: this.query, fragment: this.fragment, fsPath: this.fsPath }; },
+};
+function mkUri(f) { return Object.assign(Object.create(UriProto), { scheme: 'file', authority: '', path: '', query: '', fragment: '', fsPath: f && f.fsPath != null ? f.fsPath : (f && f.path) || '' }, f); }
+
 const vscode = {
-	version: '1.90.0',
+	version: '1.106.0', // >=1.106: extensions detect secondary-sidebar support from this (Claude Code does)
 	Position, Range, SnippetString, CompletionItem, Diagnostic, Disposable, EventEmitter,
 	Uri: {
-		file: p => ({ fsPath: p, path: p.replace(/\\/g, '/'), scheme: 'file', toString: () => 'file://' + p }),
-		parse: s => ({ fsPath: s, path: s, scheme: 'file', toString: () => s }),
+		file: p => mkUri({ scheme: 'file', path: String(p).replace(/\\/g, '/'), fsPath: p }),
+		parse: s => { const m = /^([a-zA-Z][\w+.-]*):\/\/([^/?#]*)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(String(s)); return m ? mkUri({ scheme: m[1], authority: m[2] || '', path: m[3] || '', query: m[4] || '', fragment: m[5] || '', fsPath: m[3] || '' }) : mkUri({ scheme: 'file', path: String(s), fsPath: String(s) }); },
+		from: c => mkUri(c || {}),
 	},
 	CompletionItemKind: new Proxy({}, { get: (_, k) => ({ Text: 0, Method: 1, Function: 2, Constructor: 3, Field: 4, Variable: 5, Class: 6, Interface: 7, Module: 8, Property: 9, Unit: 10, Value: 11, Enum: 12, Keyword: 13, Snippet: 14, Color: 15, File: 16, Reference: 17 })[k] ?? 0 }),
 	DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 },
 	commands: {
 		registerCommand: (id, fn) => { commands.set(id, fn); return new Disposable(); },
-		executeCommand: async (id, ...args) => { const f = commands.get(id); return f ? f(...args) : undefined; },
+		// setContext feeds `when`-clause visibility (containers/views) in the frontend
+		executeCommand: async (id, ...args) => {
+			if (id === 'setContext') { contextKeys[args[0]] = args[1]; send({ event: 'contextKeys', params: contextKeys }); return; }
+			const f = commands.get(id); return f ? f(...args) : undefined;
+		},
 		getCommands: async () => [...commands.keys()],
 	},
 	window: {
 		showInformationMessage: (m, ...rest) => { send({ event: 'message', params: { type: 'info', text: String(m) } }); return Promise.resolve(undefined); },
 		showWarningMessage: (m) => { send({ event: 'message', params: { type: 'warn', text: String(m) } }); return Promise.resolve(undefined); },
 		showErrorMessage: (m) => { send({ event: 'message', params: { type: 'error', text: String(m) } }); return Promise.resolve(undefined); },
-		createOutputChannel: name => permObj({ name, appendLine: () => {}, append: () => {}, replace: () => {}, show: () => {}, hide: () => {}, dispose: () => {}, clear: () => {}, info: () => {}, warn: () => {}, error: () => {}, debug: () => {}, trace: () => {}, logLevel: 0, onDidChangeLogLevel: () => new Disposable() }),
+		// forward extension output channels to the app's Output console — extensions
+		// log their own diagnostics there (e.g. Claude Code logs every webview message)
+		createOutputChannel: name => { const fwd = lvl => (...a) => log(`[${name}]${lvl} ` + a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ').slice(0, 400)); return permObj({ name, appendLine: fwd(''), append: () => {}, replace: () => {}, show: () => {}, hide: () => {}, dispose: () => {}, clear: () => {}, info: fwd(''), warn: fwd(' warn:'), error: fwd(' error:'), debug: () => {}, trace: () => {}, logLevel: 3, onDidChangeLogLevel: () => new Disposable() }); },
 		createStatusBarItem: () => permObj({ show: () => {}, hide: () => {}, dispose: () => {}, text: '', tooltip: '', command: undefined, color: undefined, backgroundColor: undefined }),
 		onDidChangeActiveTextEditor: () => new Disposable(),
 		activeTextEditor: undefined,
@@ -307,7 +403,25 @@ const vscode = {
 		},
 		setTextDocumentLanguage: async d => d,
 	},
-	extensions: { getExtension: () => undefined, all: [], onDidChange: () => new Disposable() },
+	// Many extensions read getExtension(self/dependency).extensionPath|exports at
+	// module-load time; returning undefined crashes them before activate. Return a
+	// permissive stub (real string paths so path.join is safe; permissive exports so
+	// dependent extensions degrade instead of throwing).
+	extensions: {
+		getExtension: (id) => {
+			const info = extById.get(String(id).toLowerCase());
+			if (!info) return permObj({ id, isActive: false, extensionKind: 1, extensionPath: '', extensionUri: vscode.Uri.file(''), packageJSON: permObj({ name: id, version: '0.0.0', publisher: String(id).split('.')[0], contributes: {} }), exports: PERMISSIVE, activate: async () => PERMISSIVE });
+			const rec = extIndex.get(info.dir);
+			const exp = () => (rec && rec.exports !== undefined) ? rec.exports : PERMISSIVE;
+			return permObj({
+				id, isActive: !!(rec && rec.activated), extensionKind: 1,
+				extensionPath: info.base, extensionUri: vscode.Uri.file(info.base),
+				packageJSON: info.pkg, get exports() { return exp(); },
+				activate: async () => { if (rec) activateExt(info.dir); return exp(); },
+			});
+		},
+		all: [], onDidChange: () => new Disposable(),
+	},
 	env: {
 		appName: 'CozyCode', appRoot: '', appHost: 'desktop', uriScheme: 'cozycode', machineId: 'cozy', sessionId: 'cozy', language: 'en',
 		clipboard: { writeText: async () => {}, readText: async () => '' },
@@ -360,9 +474,57 @@ Object.setPrototypeOf(vscode, PERMISSIVE);
 // also give each namespace a permissive prototype so missing methods
 // (workspace.onDidCloseTextDocument, window.onDidChangeX, languages.registerY, ...)
 // resolve to a no-op stub instead of throwing "is not a function"
-for (const ns of ['workspace', 'window', 'languages', 'commands', 'env', 'debug', 'tasks', 'extensions', 'scm', 'comments', 'authentication', 'notebooks', 'tests', 'l10n']) {
+// namespaces: give existing ones a permissive prototype; create missing ones as
+// own permissive objects. Own-ness matters because interop copies keep the value's
+// own prototype, so `vscode.lm.registerX` resolves to a stub instead of crashing.
+for (const ns of ['workspace', 'window', 'languages', 'commands', 'env', 'debug', 'tasks', 'extensions', 'scm', 'comments', 'authentication', 'notebooks', 'tests', 'l10n', 'lm', 'chat', 'interactive', 'speech', 'aiRelatedInformation']) {
 	if (vscode[ns] && typeof vscode[ns] === 'object') Object.setPrototypeOf(vscode[ns], PERMISSIVE);
+	else vscode[ns] = Object.create(PERMISSIVE);
 }
+
+// The PERMISSIVE prototype only helps extensions that `require('vscode')` directly.
+// Bundlers wrap it: babel `_interopRequireWildcard` / esbuild `__toESM` copy OWN
+// ENUMERABLE props to a fresh object and DROP the prototype, so any class an
+// extension `extends` (e.g. `class X extends vscode.DocumentLink`) or any enum it
+// reads must exist as an OWN prop or it becomes undefined -> load crash.
+// permissive constructable stub: `class X extends stubClass()` works AND
+// `Stub.staticFactory()` (e.g. NotebookCellOutputItem.error) resolves to a no-op.
+function stubClass() {
+	const C = class {};
+	return new Proxy(C, { get: (t, p) => (p in t || typeof p === 'symbol') ? t[p] : UNIVERSAL, set: () => true, defineProperty: () => true });
+}
+for (const n of ('DocumentLink DocumentHighlight DiagnosticRelatedInformation LocationLink ' +
+	'CallHierarchyItem CallHierarchyIncomingCall CallHierarchyOutgoingCall TypeHierarchyItem ' +
+	'SemanticTokens SemanticTokensEdit SemanticTokensEdits Color ColorInformation ColorPresentation ' +
+	'SelectionRange InlayHintLabelPart InlineValueText InlineValueVariableLookup InlineValueEvaluatableExpression ' +
+	'EvaluatableExpression InlineCompletionItem InlineCompletionList DataTransfer DataTransferItem ' +
+	'DocumentDropEdit DocumentPasteEdit ProcessExecution ShellExecution CustomExecution TaskGroup ' +
+	'NotebookCellData NotebookData NotebookEdit NotebookRange NotebookCellOutput NotebookCellOutputItem ' +
+	'NotebookCellStatusBarItem TerminalLink TerminalProfile FileDecoration DebugAdapterExecutable ' +
+	'DebugAdapterServer DebugAdapterNamedPipeServer DebugAdapterInlineImplementation LinkedEditingRanges ' +
+	'TestMessage TestTag FileCoverage StatementCoverage BranchCoverage DeclarationCoverage TestCoverageCount ' +
+	'DocumentSymbolProvider CompletionItemProvider').split(' ')) {
+	if (!Object.prototype.hasOwnProperty.call(vscode, n)) vscode[n] = stubClass();
+}
+// missing enums with their real numeric members (interop-copied exts read these)
+const ENUMS = {
+	EndOfLine: { LF: 1, CRLF: 2 }, ExtensionKind: { UI: 1, Workspace: 2 }, UIKind: { Desktop: 1, Web: 2 },
+	ExtensionMode: { Production: 1, Development: 2, Test: 3 }, LogLevel: { Off: 0, Trace: 1, Debug: 2, Info: 3, Warning: 4, Error: 5 },
+	TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
+	DecorationRangeBehavior: { OpenOpen: 0, ClosedClosed: 1, OpenClosed: 2, ClosedOpen: 3 },
+	OverviewRulerLane: { Left: 1, Center: 2, Right: 4, Full: 7 }, CompletionItemTag: { Deprecated: 1 }, SymbolTag: { Deprecated: 1 },
+	SignatureHelpTriggerKind: { Invoke: 1, TriggerCharacter: 2, ContentChange: 3 }, InlayHintKind: { Type: 1, Parameter: 2 },
+	CodeActionTriggerKind: { Invoke: 1, Automatic: 2 }, TextDocumentSaveReason: { Manual: 1, AfterDelay: 2, FocusOut: 3 },
+	FileChangeType: { Changed: 1, Created: 2, Deleted: 3 }, ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
+	ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 }, TreeItemCheckboxState: { Unchecked: 0, Checked: 1 },
+	CommentThreadCollapsibleState: { Collapsed: 0, Expanded: 1 }, QuickPickItemKind: { Separator: -1, Default: 0 },
+	TextEditorCursorStyle: { Line: 1, Block: 2, Underline: 3, LineThin: 4, BlockOutline: 5, UnderlineThin: 6 },
+	TextEditorLineNumbersStyle: { Off: 0, On: 1, Relative: 2, Interval: 3 }, InlineCompletionTriggerKind: { Invoke: 0, Automatic: 1 },
+	TestRunProfileKind: { Run: 1, Debug: 2, Coverage: 3 }, DebugConfigurationProviderTriggerKind: { Initial: 1, Dynamic: 2 },
+	NotebookControllerAffinity: { Default: 1, Preferred: 2 }, NotebookCellKind: { Markup: 1, Code: 2 }, NotebookEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
+	DebugConsoleMode: { Separate: 0, MergeWithParent: 1 }, CommentMode: { Editing: 0, Preview: 1 }, TextSearchCompleteMessageType: { Information: 1, Warning: 2 },
+};
+for (const k in ENUMS) if (!Object.prototype.hasOwnProperty.call(vscode, k)) vscode[k] = ENUMS[k];
 
 // intercept require('vscode') + stub common deps we don't fully implement so an
 // extension's require() doesn't hard-crash (LSP/nls stay no-ops but activate runs)
@@ -407,19 +569,26 @@ for (const k of NOOP_MODULES) require.cache[k] = { id: k, filename: k, loaded: t
 /* ---------- load extensions (LAZY activation like VSCode) ---------- */
 const loaded = [];
 const contributions = [];   // { id, viewsContainers, views, commands }
-const extIndex = new Map(); // dir -> { base, pkg, events:Set, activated:bool }
+const extIndex = new Map(); // dir -> { base, pkg, events:Set, activated:bool, exports }
+const extById = new Map();  // "publisher.name" (lc) -> { base, pkg, dir } (for getExtension)
 
 function makeContext(base) {
-	return {
-		subscriptions: [], extensionPath: base,
-		globalState: { get: (k, d) => d, update: async () => {}, keys: () => [], setKeysForSync: () => {} },
-		workspaceState: { get: (k, d) => d, update: async () => {}, keys: () => [] },
-		secrets: { get: async () => undefined, store: async () => {}, delete: async () => {}, onDidChange: () => new Disposable() },
+	const uri = vscode.Uri.file(base);
+	// permObj on the context and its sub-objects: missing methods (e.g.
+	// environmentVariableCollection.get, context.languageModelAccessInformation)
+	// resolve to no-op stubs instead of throwing during activate.
+	const envColl = () => permObj({ persistent: true, replace: () => {}, append: () => {}, prepend: () => {}, get: () => undefined, forEach: () => {}, delete: () => {}, clear: () => {} });
+	return permObj({
+		subscriptions: [], extensionPath: base, extensionUri: uri, extensionMode: 1,
+		globalState: permObj({ get: (k, d) => d, update: async () => {}, keys: () => [], setKeysForSync: () => {} }),
+		workspaceState: permObj({ get: (k, d) => d, update: async () => {}, keys: () => [] }),
+		secrets: permObj({ get: async () => undefined, store: async () => {}, delete: async () => {}, onDidChange: () => new Disposable() }),
 		asAbsolutePath: r => path.join(base, r),
-		extensionUri: vscode.Uri.file(base), extensionMode: 1, extension: { id: base, packageJSON: {} },
-		environmentVariableCollection: { replace: () => {}, append: () => {}, prepend: () => {}, clear: () => {}, getScoped: () => ({ replace: () => {}, append: () => {}, prepend: () => {} }) },
-		storageUri: vscode.Uri.file(base), globalStorageUri: vscode.Uri.file(base), logUri: vscode.Uri.file(base),
-	};
+		extension: permObj({ id: base, extensionPath: base, extensionUri: uri, isActive: true, packageJSON: permObj({}), exports: PERMISSIVE }),
+		environmentVariableCollection: Object.assign(envColl(), { getScoped: () => envColl() }),
+		storageUri: uri, globalStorageUri: uri, logUri: uri,
+		storagePath: base, globalStoragePath: base, logPath: base,
+	});
 }
 function setStatus(id, status) { const e = loaded.find(x => x.id === id); if (e) e.status = status; sendLoaded(); }
 
@@ -431,11 +600,11 @@ function activateExt(dir) {
 		const mod = require(path.join(rec.base, rec.pkg.main));
 		if (typeof mod.activate === 'function') {
 			Promise.resolve(mod.activate(makeContext(rec.base))).then(
-				() => setStatus(dir, 'activated'),
+				(api) => { rec.exports = api === undefined ? {} : api; setStatus(dir, 'activated'); }, // exports for dependent extensions (getExtension().exports)
 				e => setStatus(dir, 'activate failed: ' + String(e && e.message).slice(0, 100)),
 			);
-		} else setStatus(dir, 'loaded');
-	} catch (e) { setStatus(dir, 'load failed: ' + String(e && e.message).slice(0, 100)); }
+		} else { rec.exports = mod && mod.exports !== undefined ? mod.exports : {}; setStatus(dir, 'loaded'); }
+	} catch (e) { if (process.env.COZY_STACK) process.stderr.write('LOADFAIL ' + dir + '\n' + (e && e.stack) + '\n'); setStatus(dir, 'load failed: ' + String(e && e.message).slice(0, 100)); }
 }
 
 // fire an activation event -> activate any extension registered for it
@@ -452,12 +621,13 @@ const isDisabled = id => disabledExts[id] && disabledExts[id].enabled === false;
 
 if (extRoot && fs.existsSync(extRoot)) {
 	for (const dir of fs.readdirSync(extRoot)) {
-		if (dir === '.state.json' || isDisabled(dir)) continue;
+		if (dir.startsWith('.') || isDisabled(dir)) continue; // skip .state.json + partial/temp install dirs
 		const base = path.join(extRoot, dir, 'extension');
 		const pkgPath = path.join(base, 'package.json');
 		if (!fs.existsSync(pkgPath)) continue;
 		let pkg;
 		try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { continue; }
+		if (pkg.name && pkg.publisher) extById.set((pkg.publisher + '.' + pkg.name).toLowerCase(), { base, pkg, dir });
 		// resolve NLS %key% strings from package.nls.json (like VSCode)
 		let nls = {};
 		try { nls = JSON.parse(fs.readFileSync(path.join(base, 'package.nls.json'), 'utf8')); } catch {}
@@ -473,13 +643,20 @@ if (extRoot && fs.existsSync(extRoot)) {
 		for (const l of c.languages || []) if (l.id) events.add('onLanguage:' + l.id);
 		if (!pkg.activationEvents && !events.size) events.add('*'); // very old extensions
 
-		// contributions for the native adapter (localize titles, resolve icon paths)
-		const vc = ((c.viewsContainers && c.viewsContainers.activitybar) || []).map(x => ({
-			id: x.id, title: loc(x.title),
-			icon: (typeof x.icon === 'string' && !x.icon.startsWith('$(')) ? path.join(base, x.icon) : x.icon,
-		}));
+		// contributions for the native adapter (localize titles, resolve icon paths).
+		// keep the container's real location so the UI places it correctly:
+		// activitybar -> left, secondarySidebar -> right, panel -> bottom.
+		const vc = [];
+		for (const location of ['activitybar', 'secondarySidebar', 'panel']) {
+			for (const x of (c.viewsContainers && c.viewsContainers[location]) || []) {
+				vc.push({
+					id: x.id, title: loc(x.title), location, when: x.when || '',
+					icon: (typeof x.icon === 'string' && !x.icon.startsWith('$(')) ? path.join(base, x.icon) : x.icon,
+				});
+			}
+		}
 		const views = [];
-		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: loc(v.name), type: v.type || 'tree' });
+		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: loc(v.name), type: v.type || 'tree', when: v.when || '' });
 		if (vc.length || views.length || (c.commands || []).length)
 			contributions.push({ id: dir, viewsContainers: vc, views, commands: (c.commands || []).map(cm => ({ command: cm.command, title: loc(cm.title), category: loc(cm.category) })) });
 
@@ -589,33 +766,47 @@ rl.on('line', async line => {
 	if (msg.method === 'resolveWebview') {
 		const { viewId } = msg.params;
 		activateByEvent('onView:' + viewId);
-		for (let i = 0; i < 60 && !webviewProviders.has(viewId); i++) await new Promise(r => setTimeout(r, 50));
+		for (let i = 0; i < 160 && !webviewProviders.has(viewId); i++) await new Promise(r => setTimeout(r, 50));
 		const provider = webviewProviders.get(viewId);
-		if (!provider) { send({ id: msg.id, result: { html: '', error: 'no webview provider (extension may not have registered it)' } }); return; }
-		let htmlValue = '';
+		if (!provider) { send({ id: msg.id, result: { file: '', error: 'no webview provider (extension may not have registered it)' } }); return; }
+		let htmlValue = '', filePath = '', responded = false;
+		// respond as soon as html is first set (VSCode paints immediately); the rest of
+		// resolveWebviewView often awaits slow init (analysis server, DevTools) that may
+		// never settle without a project open, so we must not block the RPC on it.
+		const respond = (error) => { if (responded) return; responded = true; send({ id: msg.id, result: { file: filePath, error } }); };
 		const webview = {
 			options: {}, cspSource: "data: https: 'unsafe-inline' 'unsafe-eval'",
 			get html() { return htmlValue; },
-			set html(v) { htmlValue = v; send({ event: 'webviewHtml', params: { viewId, html: v } }); },
-			asWebviewUri: (uri) => fileToDataUri(uri && uri.fsPath ? uri.fsPath : String(uri)),
+			set html(v) { htmlValue = v; filePath = writeWebviewFile(viewId, v); send({ event: 'webviewHtml', params: { viewId, file: filePath } }); respond(); },
+			asWebviewUri: (uri) => assetUrl(uri && uri.fsPath ? uri.fsPath : String(uri)),
 			postMessage: async (m) => { send({ event: 'webviewToView', params: { viewId, msg: m } }); return true; },
-			onDidReceiveMessage: (fn) => { const w = webviews.get(viewId); if (w) w.onMsg = fn; return new Disposable(); },
+			// drain messages that arrived before the provider registered its handler —
+			// the webview's init request often lands while resolveWebviewView is still
+			// awaiting setup, and dropping it deadlocks the webview UI
+			onDidReceiveMessage: (fn) => {
+				const w = webviews.get(viewId);
+				if (w) { w.onMsg = fn; const q = w.pendingIn || []; w.pendingIn = []; for (const m of q) { try { fn(m); } catch (e) { log('webview msg error: ' + e.message); } } }
+				return new Disposable();
+			},
 		};
 		const view = {
 			viewType: viewId, webview, title: '', description: '', badge: undefined, visible: true, show: () => {},
 			onDidChangeVisibility: () => new Disposable(), onDidDispose: () => new Disposable(),
 		};
-		webviews.set(viewId, { view, onMsg: null });
-		try {
-			await Promise.resolve(provider.resolveWebviewView(view, { state: undefined }, { isCancellationRequested: false, onCancellationRequested: () => new Disposable() }));
-			send({ id: msg.id, result: { html: htmlValue } });
-		} catch (e) { send({ id: msg.id, result: { html: htmlValue, error: String(e && e.message).slice(0, 200) } }); }
+		webviews.set(viewId, { view, onMsg: null, pendingIn: [] });
+		Promise.resolve().then(() => provider.resolveWebviewView(view, { state: undefined }, { isCancellationRequested: false, onCancellationRequested: () => new Disposable() }))
+			.then(() => respond(), e => respond(String(e && e.message).slice(0, 200)));
+		// safety net: if html never gets set and resolve never settles, answer anyway
+		setTimeout(() => respond(filePath ? undefined : 'resolveWebviewView produced no html'), 7000);
 		return;
 	}
-	// message from the webview iframe -> extension's onDidReceiveMessage handler
+	// message from the webview iframe -> extension's onDidReceiveMessage handler.
+	// buffered until the handler registers (VSCode buffers both directions).
 	if (msg.method === 'webviewMessage') {
 		const w = webviews.get(msg.params.viewId);
-		if (w && w.onMsg) { try { w.onMsg(msg.params.msg); } catch (e) { log('webview msg error: ' + e.message); } }
+		if (!w) return;
+		if (w.onMsg) { try { w.onMsg(msg.params.msg); } catch (e) { log('webview msg error: ' + e.message); } }
+		else (w.pendingIn = w.pendingIn || []).push(msg.params.msg);
 		return;
 	}
 	if (msg.method === 'executeCommand') {
