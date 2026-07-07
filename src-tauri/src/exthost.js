@@ -55,6 +55,17 @@ const diagCollections = [];
 const treeProviders = new Map(); // viewId -> provider
 const treeItemCache = new Map(); // nodeKey -> element (so clicks can resolve back)
 let _nodeSeq = 1;
+const webviewProviders = new Map(); // viewId -> provider
+const webviews = new Map();         // viewId -> { view, onMsg }
+
+const MIME = { js: 'text/javascript', mjs: 'text/javascript', css: 'text/css', html: 'text/html', json: 'application/json', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', map: 'application/json' };
+function fileToDataUri(p) {
+	try {
+		const ext = String(p).toLowerCase().split('.').pop();
+		const mime = MIME[ext] || 'application/octet-stream';
+		return `data:${mime};base64,${fs.readFileSync(p).toString('base64')}`;
+	} catch { return ''; }
+}
 
 /* ---------- real LSP client (IntelliSense) ---------- */
 const cp = require('child_process');
@@ -197,7 +208,7 @@ const vscode = {
 			if (opts && opts.treeDataProvider) vscode.window.registerTreeDataProvider(viewId, opts.treeDataProvider);
 			return permObj({ reveal: async () => {}, dispose: () => treeProviders.delete(viewId), onDidChangeSelection: () => new Disposable(), onDidChangeVisibility: () => new Disposable(), onDidExpandElement: () => new Disposable(), onDidCollapseElement: () => new Disposable(), visible: true, message: '', title: viewId, description: '', badge: undefined, selection: [] });
 		},
-		registerWebviewViewProvider: () => new Disposable(),
+		registerWebviewViewProvider: (viewId, provider) => { webviewProviders.set(viewId, provider); send({ event: 'webviewReady', params: { viewId } }); return new Disposable(() => webviewProviders.delete(viewId)); },
 		showQuickPick: async (items) => Array.isArray(items) ? (await items)[0] : undefined,
 		showInputBox: async () => undefined,
 		showOpenDialog: async () => undefined, showSaveDialog: async () => undefined,
@@ -468,7 +479,7 @@ if (extRoot && fs.existsSync(extRoot)) {
 			icon: (typeof x.icon === 'string' && !x.icon.startsWith('$(')) ? path.join(base, x.icon) : x.icon,
 		}));
 		const views = [];
-		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: loc(v.name) });
+		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: loc(v.name), type: v.type || 'tree' });
 		if (vc.length || views.length || (c.commands || []).length)
 			contributions.push({ id: dir, viewsContainers: vc, views, commands: (c.commands || []).map(cm => ({ command: cm.command, title: loc(cm.title), category: loc(cm.category) })) });
 
@@ -572,6 +583,39 @@ rl.on('line', async line => {
 			}
 			send({ id: msg.id, result: out });
 		} catch (e) { log('tree error: ' + e.message); send({ id: msg.id, result: [] }); }
+		return;
+	}
+	// resolve a webview view: activate its extension, run resolveWebviewView, return html
+	if (msg.method === 'resolveWebview') {
+		const { viewId } = msg.params;
+		activateByEvent('onView:' + viewId);
+		for (let i = 0; i < 60 && !webviewProviders.has(viewId); i++) await new Promise(r => setTimeout(r, 50));
+		const provider = webviewProviders.get(viewId);
+		if (!provider) { send({ id: msg.id, result: { html: '', error: 'no webview provider (extension may not have registered it)' } }); return; }
+		let htmlValue = '';
+		const webview = {
+			options: {}, cspSource: "data: https: 'unsafe-inline' 'unsafe-eval'",
+			get html() { return htmlValue; },
+			set html(v) { htmlValue = v; send({ event: 'webviewHtml', params: { viewId, html: v } }); },
+			asWebviewUri: (uri) => fileToDataUri(uri && uri.fsPath ? uri.fsPath : String(uri)),
+			postMessage: async (m) => { send({ event: 'webviewToView', params: { viewId, msg: m } }); return true; },
+			onDidReceiveMessage: (fn) => { const w = webviews.get(viewId); if (w) w.onMsg = fn; return new Disposable(); },
+		};
+		const view = {
+			viewType: viewId, webview, title: '', description: '', badge: undefined, visible: true, show: () => {},
+			onDidChangeVisibility: () => new Disposable(), onDidDispose: () => new Disposable(),
+		};
+		webviews.set(viewId, { view, onMsg: null });
+		try {
+			await Promise.resolve(provider.resolveWebviewView(view, { state: undefined }, { isCancellationRequested: false, onCancellationRequested: () => new Disposable() }));
+			send({ id: msg.id, result: { html: htmlValue } });
+		} catch (e) { send({ id: msg.id, result: { html: htmlValue, error: String(e && e.message).slice(0, 200) } }); }
+		return;
+	}
+	// message from the webview iframe -> extension's onDidReceiveMessage handler
+	if (msg.method === 'webviewMessage') {
+		const w = webviews.get(msg.params.viewId);
+		if (w && w.onMsg) { try { w.onMsg(msg.params.msg); } catch (e) { log('webview msg error: ' + e.message); } }
 		return;
 	}
 	if (msg.method === 'executeCommand') {

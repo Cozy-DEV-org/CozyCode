@@ -237,11 +237,11 @@ function renderExplorerExtViews() {
 		hdr.className = 'scm-sec-header';
 		hdr.innerHTML = `<span class="codicon codicon-chevron-right"></span> ${esc((v.name || v.id).toUpperCase())}`;
 		const body = document.createElement('div');
-		body.className = 'ext-tree hidden';
+		body.className = (v.type === 'webview' ? 'ext-webview-host' : 'ext-tree') + ' hidden';
 		hdr.onclick = () => {
 			const hid = body.classList.toggle('hidden');
 			hdr.querySelector('.codicon').className = `codicon codicon-chevron-${hid ? 'right' : 'down'}`;
-			if (!hid && !body.childElementCount) loadTreeChildren(v.id, null, body, 0);
+			if (!hid && !body.childElementCount) { v.type === 'webview' ? renderWebviewView(v.id, body) : loadTreeChildren(v.id, null, body, 0); }
 		};
 		sec.appendChild(hdr); sec.appendChild(body);
 		host.appendChild(sec);
@@ -284,6 +284,14 @@ function showExtContainer(id) {
 	const host = $('#ext-views');
 	host.classList.remove('hidden');
 	host.innerHTML = `<div class="view-title"><span>${esc(ct.title.toUpperCase())}</span></div>`;
+	// if the container has a single webview view, fill the whole panel with it
+	if (ct.views.length === 1 && ct.views[0].type === 'webview') {
+		const body = document.createElement('div');
+		body.className = 'ext-webview-host';
+		host.appendChild(body);
+		renderWebviewView(ct.views[0].id, body);
+		return;
+	}
 	for (const v of ct.views) {
 		const sec = document.createElement('div');
 		sec.className = 'ext-tree-sec';
@@ -291,12 +299,57 @@ function showExtContainer(id) {
 		hdr.className = 'scm-sec-header';
 		hdr.innerHTML = `<span class="codicon codicon-chevron-down"></span> ${esc((v.name || v.id).toUpperCase())}`;
 		const body = document.createElement('div');
-		body.className = 'ext-tree';
+		body.className = v.type === 'webview' ? 'ext-webview-host' : 'ext-tree';
 		hdr.onclick = () => { const h = body.classList.toggle('hidden'); hdr.querySelector('.codicon').className = `codicon codicon-chevron-${h ? 'right' : 'down'}`; };
 		sec.appendChild(hdr); sec.appendChild(body);
 		host.appendChild(sec);
-		loadTreeChildren(v.id, null, body, 0);
+		if (v.type === 'webview') renderWebviewView(v.id, body);
+		else loadTreeChildren(v.id, null, body, 0);
 	}
+}
+
+/* ---------- webview views (Claude Code / Copilot etc.) ---------- */
+const webviewFrames = new Map(); // viewId -> iframe
+let webviewBound = false;
+function bindWebview() {
+	if (webviewBound) return;
+	webviewBound = true;
+	// extension -> webview
+	listen('webviewToView', e => { const f = webviewFrames.get(e.payload.viewId); if (f && f.contentWindow) f.contentWindow.postMessage(e.payload.msg, '*'); });
+	// live html updates (extension re-sets webview.html)
+	listen('webviewHtml', e => { const f = webviewFrames.get(e.payload.viewId); if (f) f.srcdoc = processWebviewHtml(e.payload.html, e.payload.viewId); });
+	// webview -> extension (from the iframe's acquireVsCodeApi().postMessage)
+	window.addEventListener('message', ev => {
+		const d = ev.data;
+		if (d && d.__cozyWv && d.viewId) invoke('exthost_send', { line: JSON.stringify({ method: 'webviewMessage', params: { viewId: d.viewId, msg: d.msg } }) }).catch(() => { });
+	});
+}
+
+// inject an acquireVsCodeApi() shim + strip CSP so the iframe can run the ext UI
+function processWebviewHtml(html, viewId) {
+	if (!html) return '<body style="color:#888;font-family:sans-serif;padding:12px">Webview did not provide content.</body>';
+	html = html.replace(/<meta[^>]*http-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
+	const shim = `<script>(function(){
+		let _state; const _api = { postMessage:function(m){ parent.postMessage({__cozyWv:true, viewId:${JSON.stringify(viewId)}, msg:m}, '*'); }, getState:function(){return _state;}, setState:function(s){_state=s;return s;} };
+		window.acquireVsCodeApi = function(){ return _api; };
+	})();</script>`;
+	return html.includes('</head>') ? html.replace('</head>', shim + '</head>') : shim + html;
+}
+
+async function renderWebviewView(viewId, container) {
+	bindWebview();
+	container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim);padding:8px">Loading...</div>';
+	let res;
+	try { res = await rpc('resolveWebview', { viewId }, 12000); } catch { res = null; }
+	container.innerHTML = '';
+	if (!res) { container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim);padding:8px">Webview did not load.</div>'; return; }
+	const frame = document.createElement('iframe');
+	frame.className = 'ext-webview';
+	frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups');
+	frame.srcdoc = processWebviewHtml(res.html, viewId);
+	container.appendChild(frame);
+	webviewFrames.set(viewId, frame);
+	if (res.error) cozyLog('exthost', 'webview ' + viewId + ': ' + res.error);
 }
 
 async function loadTreeChildren(viewId, nodeKey, container, depth) {
