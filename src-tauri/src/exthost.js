@@ -188,11 +188,25 @@ const vscode = {
 		registerWebviewViewProvider: () => new Disposable(),
 		showQuickPick: async (items) => Array.isArray(items) ? (await items)[0] : undefined,
 		showInputBox: async () => undefined,
+		showOpenDialog: async () => undefined, showSaveDialog: async () => undefined,
 		withProgress: async (opts, task) => task({ report: () => {} }, { isCancellationRequested: false, onCancellationRequested: () => new Disposable() }),
 		setStatusBarMessage: () => new Disposable(),
 		registerUriHandler: () => new Disposable(),
 		registerCustomEditorProvider: () => new Disposable(),
-		terminals: [], onDidOpenTerminal: () => new Disposable(), onDidCloseTerminal: () => new Disposable(),
+		registerTerminalLinkProvider: () => new Disposable(),
+		registerFileDecorationProvider: () => new Disposable(),
+		createWebviewPanel: () => ({ webview: { html: '', options: {}, onDidReceiveMessage: () => new Disposable(), postMessage: async () => true, asWebviewUri: u => u, cspSource: '' }, onDidDispose: () => new Disposable(), onDidChangeViewState: () => new Disposable(), reveal: () => {}, dispose: () => {}, visible: true, active: true, title: '' }),
+		createQuickPick: () => ({ items: [], onDidChangeValue: () => new Disposable(), onDidAccept: () => new Disposable(), onDidHide: () => new Disposable(), onDidChangeSelection: () => new Disposable(), show: () => {}, hide: () => {}, dispose: () => {}, value: '', placeholder: '', busy: false }),
+		createInputBox: () => ({ onDidAccept: () => new Disposable(), onDidHide: () => new Disposable(), onDidChangeValue: () => new Disposable(), show: () => {}, hide: () => {}, dispose: () => {}, value: '' }),
+		createTerminal: () => ({ sendText: () => {}, show: () => {}, hide: () => {}, dispose: () => {}, name: '', processId: Promise.resolve(undefined) }),
+		showTextDocument: async () => undefined,
+		visibleTextEditors: [], onDidChangeVisibleTextEditors: () => new Disposable(),
+		onDidChangeTextEditorSelection: () => new Disposable(), onDidChangeTextEditorVisibleRanges: () => new Disposable(),
+		onDidChangeActiveColorTheme: () => new Disposable(), activeColorTheme: { kind: 2 },
+		onDidChangeWindowState: () => new Disposable(), state: { focused: true },
+		tabGroups: { all: [], activeTabGroup: { tabs: [] }, onDidChangeTabs: () => new Disposable(), onDidChangeTabGroups: () => new Disposable(), close: async () => true },
+		terminals: [], onDidOpenTerminal: () => new Disposable(), onDidCloseTerminal: () => new Disposable(), onDidChangeActiveTerminal: () => new Disposable(),
+		activeTerminal: undefined, showWorkspaceFolderPick: async () => undefined,
 	},
 	workspace: {
 		getConfiguration: () => ({ get: (k, d) => d, has: () => false, update: async () => {}, inspect: () => undefined }),
@@ -202,8 +216,22 @@ const vscode = {
 		onDidSaveTextDocument: () => new Disposable(),
 		workspaceFolders: [],
 		textDocuments: [],
-		fs: { readFile: async u => fs.readFileSync(u.fsPath) },
+		name: undefined, workspaceFile: undefined,
+		fs: { readFile: async u => fs.readFileSync(u.fsPath || String(u)), writeFile: async () => {}, stat: async () => ({ type: 1, size: 0, ctime: 0, mtime: 0 }), readDirectory: async () => [], createDirectory: async () => {}, delete: async () => {}, rename: async () => {}, copy: async () => {} },
 		openTextDocument: async () => { throw new Error('not supported'); },
+		findFiles: async () => [],
+		saveAll: async () => true,
+		applyEdit: async () => true,
+		createFileSystemWatcher: () => ({ onDidCreate: () => new Disposable(), onDidChange: () => new Disposable(), onDidDelete: () => new Disposable(), dispose: () => {} }),
+		getWorkspaceFolder: () => undefined,
+		asRelativePath: p => (p && p.fsPath) || String(p),
+		onDidChangeWorkspaceFolders: () => new Disposable(),
+		onDidCreateFiles: () => new Disposable(), onDidDeleteFiles: () => new Disposable(), onDidRenameFiles: () => new Disposable(),
+		registerTextDocumentContentProvider: () => new Disposable(),
+		registerFileSystemProvider: () => new Disposable(),
+		registerTaskProvider: () => new Disposable(),
+		onWillSaveTextDocument: () => new Disposable(),
+		isTrusted: true, onDidGrantWorkspaceTrust: () => new Disposable(),
 	},
 	languages: {
 		registerCompletionItemProvider: (selector, provider, ...triggers) => {
@@ -213,6 +241,29 @@ const vscode = {
 		registerHoverProvider: () => new Disposable(),
 		registerDefinitionProvider: () => new Disposable(),
 		registerDocumentFormattingEditProvider: () => new Disposable(),
+		registerCodeActionsProvider: () => new Disposable(),
+		registerDocumentSymbolProvider: () => new Disposable(),
+		registerReferenceProvider: () => new Disposable(),
+		registerRenameProvider: () => new Disposable(),
+		registerCodeLensProvider: () => new Disposable(),
+		registerSignatureHelpProvider: () => new Disposable(),
+		registerDocumentRangeFormattingEditProvider: () => new Disposable(),
+		registerFoldingRangeProvider: () => new Disposable(),
+		registerColorProvider: () => new Disposable(),
+		registerDocumentLinkProvider: () => new Disposable(),
+		registerImplementationProvider: () => new Disposable(),
+		registerTypeDefinitionProvider: () => new Disposable(),
+		registerDeclarationProvider: () => new Disposable(),
+		registerInlayHintsProvider: () => new Disposable(),
+		registerWorkspaceSymbolProvider: () => new Disposable(),
+		registerOnTypeFormattingEditProvider: () => new Disposable(),
+		registerSelectionRangeProvider: () => new Disposable(),
+		registerCallHierarchyProvider: () => new Disposable(),
+		registerDocumentSemanticTokensProvider: () => new Disposable(),
+		registerEvaluatableExpressionProvider: () => new Disposable(),
+		onDidChangeDiagnostics: () => new Disposable(),
+		getDiagnostics: () => [],
+		match: () => 10,
 		createDiagnosticCollection: name => {
 			const col = {
 				name,
@@ -233,19 +284,46 @@ const vscode = {
 		},
 		setTextDocumentLanguage: async d => d,
 	},
-	extensions: { getExtension: () => undefined, all: [] },
-	env: { appName: 'CozyCode', machineId: 'cozy', language: 'en', clipboard: { writeText: async () => {}, readText: async () => '' } },
-	ProgressLocation: { Notification: 15, Window: 10 },
+	extensions: { getExtension: () => undefined, all: [], onDidChange: () => new Disposable() },
+	env: {
+		appName: 'CozyCode', appRoot: '', appHost: 'desktop', uriScheme: 'cozycode', machineId: 'cozy', sessionId: 'cozy', language: 'en',
+		clipboard: { writeText: async () => {}, readText: async () => '' },
+		openExternal: async () => true, asExternalUri: async u => u, remoteName: undefined, shell: process.env.ComSpec || 'cmd.exe',
+		isTelemetryEnabled: false, onDidChangeTelemetryEnabled: () => new Disposable(),
+	},
+	tasks: { registerTaskProvider: () => new Disposable(), onDidStartTask: () => new Disposable(), onDidEndTask: () => new Disposable(), taskExecutions: [], executeTask: async () => ({ terminate() {} }) },
+	debug: { registerDebugConfigurationProvider: () => new Disposable(), registerDebugAdapterDescriptorFactory: () => new Disposable(), onDidStartDebugSession: () => new Disposable(), onDidTerminateDebugSession: () => new Disposable(), onDidChangeActiveDebugSession: () => new Disposable(), onDidReceiveDebugSessionCustomEvent: () => new Disposable(), startDebugging: async () => false, activeDebugSession: undefined, breakpoints: [], addBreakpoints: () => {}, removeBreakpoints: () => {} },
+	ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 },
 	StatusBarAlignment: { Left: 1, Right: 2 },
-	ConfigurationTarget: { Global: 1, Workspace: 2 },
-	MarkdownString: class { constructor(v) { this.value = v || ''; } appendMarkdown(v) { this.value += v; return this; } },
+	ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
+	ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
+	FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
+	CompletionTriggerKind: { Invoke: 0, TriggerCharacter: 1, TriggerForIncompleteCompletions: 2 },
+	SymbolKind: new Proxy({}, { get: () => 0 }),
+	CodeActionKind: new Proxy({ Empty: { value: '' } }, { get: (t, k) => t[k] ?? { value: String(k), append: () => ({ value: String(k) }) } }),
+	DiagnosticTag: { Unnecessary: 1, Deprecated: 2 },
+	MarkdownString: class { constructor(v) { this.value = v || ''; this.isTrusted = false; this.supportThemeIcons = false; } appendText(t) { this.value += t; return this; } appendMarkdown(v) { this.value += v; return this; } appendCodeblock(c) { this.value += '\n```\n' + c + '\n```\n'; return this; } },
 	ThemeColor: class { constructor(id) { this.id = id; } },
 	TreeItem: class { constructor(label, collapsibleState) { this.label = label; this.collapsibleState = collapsibleState || 0; } },
 	TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
 	ThemeIcon: class { constructor(id) { this.id = id; } },
-	CodeLens: class {}, Hover: class { constructor(c) { this.contents = [c]; } },
-	Location: class {}, TextEdit: class { static replace(r, t) { return { range: r, newText: t }; } },
+	CodeLens: class { constructor(range, command) { this.range = range; this.command = command; } },
+	Hover: class { constructor(c) { this.contents = Array.isArray(c) ? c : [c]; } },
+	Location: class { constructor(uri, range) { this.uri = uri; this.range = range; } },
+	TextEdit: class { static replace(r, t) { return { range: r, newText: t }; } static insert(p, t) { return { range: new Range(p, p), newText: t }; } static delete(r) { return { range: r, newText: '' }; } },
+	WorkspaceEdit: class { constructor() { this._e = []; } replace() {} insert() {} delete() {} set() {} },
+	RelativePattern: class { constructor(base, pattern) { this.base = base; this.pattern = pattern; } },
+	CancellationTokenSource: class { constructor() { this.token = { isCancellationRequested: false, onCancellationRequested: () => new Disposable() }; } cancel() {} dispose() {} },
+	CompletionList: class { constructor(items, incomplete) { this.items = items || []; this.isIncomplete = !!incomplete; } },
+	SymbolInformation: class {}, DocumentSymbol: class {}, CodeAction: class { constructor(title, kind) { this.title = title; this.kind = kind; } },
+	Selection: class { constructor(a, b, c, d) { this.anchor = a; this.active = b; this.start = a; this.end = b; } },
+	QuickInputButtons: { Back: {} },
+	SignatureHelp: class { constructor() { this.signatures = []; } }, SignatureInformation: class {}, ParameterInformation: class {},
+	FileSystemError: Object.assign(class extends Error {}, { FileNotFound: () => new Error('FileNotFound'), FileExists: () => new Error('FileExists'), NoPermissions: () => new Error('NoPermissions') }),
+	FoldingRange: class {}, FoldingRangeKind: { Comment: 1, Imports: 2, Region: 3 },
+	InlayHint: class {}, SemanticTokensBuilder: class { push() {} build() { return {}; } }, SemanticTokensLegend: class {},
 };
+vscode.Uri.joinPath = (base, ...parts) => vscode.Uri.file(path.join(base.fsPath || String(base), ...parts));
 
 // intercept require('vscode') + stub common deps we don't fully implement so an
 // extension's require() doesn't hard-crash (LSP/nls stay no-ops but activate runs)
@@ -336,6 +414,12 @@ if (extRoot && fs.existsSync(extRoot)) {
 		if (!fs.existsSync(pkgPath)) continue;
 		let pkg;
 		try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { continue; }
+		// resolve NLS %key% strings from package.nls.json (like VSCode)
+		let nls = {};
+		try { nls = JSON.parse(fs.readFileSync(path.join(base, 'package.nls.json'), 'utf8')); } catch {}
+		const loc = s => (typeof s === 'string' && s.length > 1 && s[0] === '%' && s[s.length - 1] === '%')
+			? (typeof nls[s.slice(1, -1)] === 'string' ? nls[s.slice(1, -1)] : (nls[s.slice(1, -1)] && nls[s.slice(1, -1)].message) || s)
+			: s;
 		const c = pkg.contributes || {};
 
 		// explicit + implicit activation events (VSCode auto-generates from contributes)
@@ -345,15 +429,15 @@ if (extRoot && fs.existsSync(extRoot)) {
 		for (const l of c.languages || []) if (l.id) events.add('onLanguage:' + l.id);
 		if (!pkg.activationEvents && !events.size) events.add('*'); // very old extensions
 
-		// contributions for the native adapter (resolve container icon paths to absolute)
+		// contributions for the native adapter (localize titles, resolve icon paths)
 		const vc = ((c.viewsContainers && c.viewsContainers.activitybar) || []).map(x => ({
-			id: x.id, title: x.title,
+			id: x.id, title: loc(x.title),
 			icon: (typeof x.icon === 'string' && !x.icon.startsWith('$(')) ? path.join(base, x.icon) : x.icon,
 		}));
 		const views = [];
-		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: v.name });
+		for (const container in (c.views || {})) for (const v of c.views[container]) views.push({ container, id: v.id, name: loc(v.name) });
 		if (vc.length || views.length || (c.commands || []).length)
-			contributions.push({ id: dir, viewsContainers: vc, views, commands: (c.commands || []).map(cm => ({ command: cm.command, title: cm.title, category: cm.category })) });
+			contributions.push({ id: dir, viewsContainers: vc, views, commands: (c.commands || []).map(cm => ({ command: cm.command, title: loc(cm.title), category: loc(cm.category) })) });
 
 		if (pkg.main) { extIndex.set(dir, { base, pkg, events, activated: false }); loaded.push({ id: dir, status: 'registered' }); }
 		else loaded.push({ id: dir, status: 'no-code (themes/snippets)' });
@@ -425,7 +509,11 @@ rl.on('line', async line => {
 	// tree data for a contributed view: children of a node (or roots when no node)
 	if (msg.method === 'treeChildren') {
 		const { viewId, nodeKey } = msg.params;
-		if (!nodeKey) { activateByEvent('onView:' + viewId); await new Promise(r => setTimeout(r, 120)); }
+		if (!nodeKey) {
+			activateByEvent('onView:' + viewId);
+			// wait for the extension to register its tree provider (activation is async)
+			for (let i = 0; i < 40 && !treeProviders.has(viewId); i++) await new Promise(r => setTimeout(r, 50));
+		}
 		const provider = treeProviders.get(viewId);
 		if (!provider) { send({ id: msg.id, result: [] }); return; }
 		try {
