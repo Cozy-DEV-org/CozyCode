@@ -24,7 +24,7 @@ pub struct DeviceCode {
 // Step 1: request a device+user code. client_id = a GitHub OAuth App with
 // "Device Flow" enabled (no client secret needed for device flow).
 #[tauri::command]
-pub fn gh_device_start(client_id: String, scope: String) -> Result<DeviceCode, String> {
+pub async fn gh_device_start(client_id: String, scope: String) -> Result<DeviceCode, String> {
     let cid: String = client_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
     let sc: String = scope.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '_' | ' ')).collect();
     if cid.is_empty() {
@@ -46,7 +46,7 @@ pub fn gh_device_start(client_id: String, scope: String) -> Result<DeviceCode, S
 // Step 2: poll for the token. Returns Ok(Some(token)) when authorized,
 // Ok(None) while pending, Err on hard failure.
 #[tauri::command]
-pub fn gh_device_poll(client_id: String, device_code: String) -> Result<Option<String>, String> {
+pub async fn gh_device_poll(client_id: String, device_code: String) -> Result<Option<String>, String> {
     let cid: String = client_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.').collect();
     let dc: String = device_code.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-').collect();
     let v = ps_json(&format!(
@@ -65,7 +65,7 @@ pub fn gh_device_poll(client_id: String, device_code: String) -> Result<Option<S
 }
 
 #[tauri::command]
-pub fn gh_api(token: String, method: String, path: String, body: Option<String>) -> Result<String, String> {
+pub async fn gh_api(token: String, method: String, path: String, body: Option<String>) -> Result<String, String> {
     let tok: String = token.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
     if !path.starts_with('/') || path.contains('\'') {
         return Err("bad path".into());

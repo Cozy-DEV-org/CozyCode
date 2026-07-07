@@ -21,7 +21,7 @@ fn open(repo: &str) -> Result<Repository, String> {
 }
 
 #[tauri::command]
-pub fn git_info(repo: String) -> GitInfo {
+pub async fn git_info(repo: String) -> GitInfo {
     match open(&repo) {
         Ok(r) => {
             let branch = r
@@ -36,7 +36,7 @@ pub fn git_info(repo: String) -> GitInfo {
 }
 
 #[tauri::command]
-pub fn git_status(repo: String) -> Result<Vec<GitFileStatus>, String> {
+pub async fn git_status(repo: String) -> Result<Vec<GitFileStatus>, String> {
     let r = open(&repo)?;
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(true);
@@ -78,7 +78,7 @@ pub fn git_status(repo: String) -> Result<Vec<GitFileStatus>, String> {
 }
 
 #[tauri::command]
-pub fn git_stage(repo: String, path: String) -> Result<(), String> {
+pub async fn git_stage(repo: String, path: String) -> Result<(), String> {
     let r = open(&repo)?;
     let mut index = r.index().map_err(|e| e.message().to_string())?;
     let rel = Path::new(&path);
@@ -92,7 +92,7 @@ pub fn git_stage(repo: String, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_unstage(repo: String, path: String) -> Result<(), String> {
+pub async fn git_unstage(repo: String, path: String) -> Result<(), String> {
     let r = open(&repo)?;
     let head = r.head().and_then(|h| h.peel(git2::ObjectType::Commit)).ok();
     r.reset_default(head.as_ref(), [&path])
@@ -100,7 +100,7 @@ pub fn git_unstage(repo: String, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_discard(repo: String, path: String) -> Result<(), String> {
+pub async fn git_discard(repo: String, path: String) -> Result<(), String> {
     let r = open(&repo)?;
     let mut cb = git2::build::CheckoutBuilder::new();
     cb.path(&path).force();
@@ -108,7 +108,7 @@ pub fn git_discard(repo: String, path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn git_commit(repo: String, message: String) -> Result<String, String> {
+pub async fn git_commit(repo: String, message: String) -> Result<String, String> {
     let r = open(&repo)?;
     let sig = r.signature().map_err(|e| e.message().to_string())?;
     let mut index = r.index().map_err(|e| e.message().to_string())?;
@@ -145,7 +145,7 @@ fn run_git(repo: &str, args: &[&str]) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn find_repos(root: String) -> Vec<String> {
+pub async fn find_repos(root: String) -> Vec<String> {
     fn scan(dir: &Path, depth: u32, out: &mut Vec<String>) {
         if out.len() >= 20 {
             return;
@@ -177,7 +177,7 @@ pub fn find_repos(root: String) -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn git_log(repo: String, path: Option<String>, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
+pub async fn git_log(repo: String, path: Option<String>, limit: Option<u32>) -> Result<Vec<GitCommit>, String> {
     let n = format!("-n{}", limit.unwrap_or(100));
     let mut args: Vec<String> = vec![
         "log".into(),
@@ -207,19 +207,19 @@ pub fn git_log(repo: String, path: Option<String>, limit: Option<u32>) -> Result
 }
 
 #[tauri::command]
-pub fn git_show_commit(repo: String, hash: String) -> Result<String, String> {
+pub async fn git_show_commit(repo: String, hash: String) -> Result<String, String> {
     run_git(&repo, &["show", "--stat", "--patch", &hash])
 }
 
 // rev "" = index (stage 0), otherwise e.g. "HEAD" or a commit hash
 #[tauri::command]
-pub fn git_file_at(repo: String, rev: String, path: String) -> Result<String, String> {
+pub async fn git_file_at(repo: String, rev: String, path: String) -> Result<String, String> {
     let spec = format!("{}:{}", rev, path.replace('\\', "/"));
     run_git(&repo, &["show", &spec])
 }
 
 #[tauri::command]
-pub fn git_branches(repo: String) -> Result<Vec<String>, String> {
+pub async fn git_branches(repo: String) -> Result<Vec<String>, String> {
     Ok(run_git(&repo, &["branch", "--format=%(refname:short)"])?
         .lines()
         .map(String::from)
@@ -227,37 +227,37 @@ pub fn git_branches(repo: String) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn git_checkout(repo: String, branch: String) -> Result<String, String> {
+pub async fn git_checkout(repo: String, branch: String) -> Result<String, String> {
     run_git(&repo, &["checkout", &branch])
 }
 
 #[tauri::command]
-pub fn git_push(repo: String) -> Result<String, String> {
+pub async fn git_push(repo: String) -> Result<String, String> {
     run_git(&repo, &["push"])
 }
 
 #[tauri::command]
-pub fn git_pull(repo: String) -> Result<String, String> {
+pub async fn git_pull(repo: String) -> Result<String, String> {
     run_git(&repo, &["pull"])
 }
 
 #[tauri::command]
-pub fn git_stage_all(repo: String) -> Result<String, String> {
+pub async fn git_stage_all(repo: String) -> Result<String, String> {
     run_git(&repo, &["add", "-A"])
 }
 
 #[tauri::command]
-pub fn git_merge(repo: String, branch: String) -> Result<String, String> {
+pub async fn git_merge(repo: String, branch: String) -> Result<String, String> {
     run_git(&repo, &["merge", &branch])
 }
 
 #[tauri::command]
-pub fn git_remote_url(repo: String) -> Result<String, String> {
+pub async fn git_remote_url(repo: String) -> Result<String, String> {
     Ok(run_git(&repo, &["remote", "get-url", "origin"])?.trim().to_string())
 }
 
 #[tauri::command]
-pub fn git_default_branch(repo: String) -> String {
+pub async fn git_default_branch(repo: String) -> String {
     run_git(&repo, &["symbolic-ref", "refs/remotes/origin/HEAD", "--short"])
         .map(|s| s.trim().replace("origin/", ""))
         .unwrap_or_else(|_| "main".into())
@@ -265,7 +265,7 @@ pub fn git_default_branch(repo: String) -> String {
 
 // full diff for AI commit-message generation (truncated to keep prompts sane)
 #[tauri::command]
-pub fn git_diff_all(repo: String, staged: bool) -> Result<String, String> {
+pub async fn git_diff_all(repo: String, staged: bool) -> Result<String, String> {
     let status = run_git(&repo, &["status", "--short"])?;
     let diff = if staged {
         run_git(&repo, &["diff", "--cached"])?
@@ -281,7 +281,7 @@ pub fn git_diff_all(repo: String, staged: bool) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn git_diff_file(repo: String, path: String, staged: bool) -> Result<String, String> {
+pub async fn git_diff_file(repo: String, path: String, staged: bool) -> Result<String, String> {
     // ponytail: shell out to git for diff text — libgit2 patch formatting is more
     // code for the same output; git CLI is guaranteed present for our users.
     let mut args = vec!["diff"];

@@ -110,7 +110,7 @@ fn find_url(line: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn tunnel_start(
+pub async fn tunnel_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, TunnelState>,
     provider: String,
@@ -179,8 +179,9 @@ pub fn tunnel_start(
 }
 
 #[tauri::command]
-pub fn tunnel_stop(state: tauri::State<'_, TunnelState>, port: u16) {
+pub async fn tunnel_stop(state: tauri::State<'_, TunnelState>, port: u16) -> Result<(), String> {
     if let Some(mut child) = state.0.lock().unwrap().remove(&port) {
         let _ = child.kill();
     }
+    Ok(())
 }

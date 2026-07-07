@@ -28,7 +28,7 @@ fn which(exe: &str) -> Option<String> {
 
 // Detect the shells actually present on this machine, in VSCode-ish preference order.
 #[tauri::command]
-pub fn detect_shells() -> Vec<ShellInfo> {
+pub async fn detect_shells() -> Vec<ShellInfo> {
     let mut out = Vec::new();
     let mut push = |name: &str, path: String, args: Vec<&str>| {
         if !out.iter().any(|s: &ShellInfo| s.path.eq_ignore_ascii_case(&path)) {
@@ -80,14 +80,14 @@ pub fn detect_shells() -> Vec<ShellInfo> {
 // which honours PATHEXT). Used so we can launch npm-shim CLIs like `claude`
 // (which is claude.cmd, not on the raw CreateProcess search path in a pty).
 #[tauri::command]
-pub fn resolve_command(name: String) -> Option<String> {
+pub async fn resolve_command(name: String) -> Option<String> {
     which(&name)
 }
 
 // The path passed on the command line (Open with CozyCode / double-click a file).
 // Returns {path, is_dir} or null when launched with no argument.
 #[tauri::command]
-pub fn launch_target() -> Option<serde_json::Value> {
+pub async fn launch_target() -> Option<serde_json::Value> {
     let arg = std::env::args().nth(1)?;
     if arg.starts_with('-') {
         return None;
@@ -105,7 +105,7 @@ pub fn launch_target() -> Option<serde_json::Value> {
 // Register HKCU context-menu entries: "Open with CozyCode" on files and folders.
 // currentUser hive => no admin needed. Uninstall by deleting the same keys.
 #[tauri::command]
-pub fn register_context_menu() -> Result<(), String> {
+pub async fn register_context_menu() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe_s = exe.to_string_lossy().replace('\\', "\\\\");
     let ps = format!(
@@ -145,7 +145,7 @@ AddMenu 'HKCU:\Software\Classes\Directory\Background\shell\CozyCode'
 
 // Check the latest published release on GitHub (public API, no auth).
 #[tauri::command]
-pub fn check_update() -> Result<serde_json::Value, String> {
+pub async fn check_update() -> Result<serde_json::Value, String> {
     let out = crate::util::command("powershell")
         .args(["-NoProfile", "-Command",
             "(Invoke-RestMethod -Uri 'https://api.github.com/repos/Cozy-DEV-org/CozyCode/releases/latest' -Headers @{'User-Agent'='CozyCode'}) | Select-Object tag_name,html_url,name | ConvertTo-Json -Compress"])
@@ -160,7 +160,7 @@ pub fn check_update() -> Result<serde_json::Value, String> {
 // Detect language runtimes on PATH (for the Run/Debug button). Returns
 // { name: version_or_"" } for those found.
 #[tauri::command]
-pub fn detect_runtimes() -> serde_json::Value {
+pub async fn detect_runtimes() -> serde_json::Value {
     let mut m = serde_json::Map::new();
     for (name, arg) in [
         ("node", "--version"),
@@ -186,7 +186,7 @@ pub fn detect_runtimes() -> serde_json::Value {
 }
 
 #[tauri::command]
-pub fn open_url(url: String) -> Result<(), String> {
+pub async fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("invalid url".into());
     }

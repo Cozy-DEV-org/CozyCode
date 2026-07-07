@@ -7,13 +7,13 @@ fn settings_path() -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn settings_read() -> Result<String, String> {
+pub async fn settings_read() -> Result<String, String> {
     let p = settings_path()?;
     Ok(std::fs::read_to_string(&p).unwrap_or_else(|_| "{}".into()))
 }
 
 #[tauri::command]
-pub fn settings_write(content: String) -> Result<(), String> {
+pub async fn settings_write(content: String) -> Result<(), String> {
     serde_json::from_str::<serde_json::Value>(&content).map_err(|e| format!("invalid JSON: {e}"))?;
     std::fs::write(settings_path()?, content).map_err(|e| e.to_string())
 }
@@ -21,7 +21,7 @@ pub fn settings_write(content: String) -> Result<(), String> {
 // Runs a user-configured formatter, e.g. "rustfmt {file}" or "npx prettier --write {file}".
 // User-owned config running on the user's own machine — same trust model as VSCode tasks.
 #[tauri::command]
-pub fn run_formatter(command: String, path: String) -> Result<String, String> {
+pub async fn run_formatter(command: String, path: String) -> Result<String, String> {
     let full = command.replace("{file}", &format!("\"{}\"", path));
     let out = crate::util::command("cmd")
         .args(["/C", &full])

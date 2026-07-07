@@ -19,7 +19,7 @@ fn parse_data_url(d: &str) -> Option<(String, String)> {
 
 // images: optional list of data URLs ("data:image/png;base64,....") for vision models
 #[tauri::command]
-pub fn ai_generate(
+pub async fn ai_generate(
     base_url: String,
     api_key: String,
     model: String,

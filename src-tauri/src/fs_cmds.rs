@@ -10,7 +10,7 @@ pub struct DirEntry {
 }
 
 #[tauri::command]
-pub fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+pub async fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     let mut entries: Vec<DirEntry> = fs::read_dir(&path)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
@@ -33,13 +33,13 @@ pub fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-pub fn read_file(path: String) -> Result<String, String> {
+pub async fn read_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 // base64 for binary viewers (image/video/pdf/xlsx). std-only base64 encoder.
 #[tauri::command]
-pub fn read_file_base64(path: String) -> Result<String, String> {
+pub async fn read_file_base64(path: String) -> Result<String, String> {
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -56,7 +56,7 @@ pub fn read_file_base64(path: String) -> Result<String, String> {
 
 // Save with an explicit text encoding + optional BOM, like VSCode's "Save with Encoding".
 #[tauri::command]
-pub fn write_file_encoded(path: String, content: String, encoding: String) -> Result<(), String> {
+pub async fn write_file_encoded(path: String, content: String, encoding: String) -> Result<(), String> {
     let bytes: Vec<u8> = match encoding.as_str() {
         "utf8" => content.into_bytes(),
         "utf8bom" => {
@@ -85,12 +85,12 @@ pub fn write_file_encoded(path: String, content: String, encoding: String) -> Re
 }
 
 #[tauri::command]
-pub fn write_file(path: String, content: String) -> Result<(), String> {
+pub async fn write_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn create_file(path: String) -> Result<(), String> {
+pub async fn create_file(path: String) -> Result<(), String> {
     if Path::new(&path).exists() {
         return Err("File already exists".into());
     }
@@ -98,17 +98,17 @@ pub fn create_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn create_dir(path: String) -> Result<(), String> {
+pub async fn create_dir(path: String) -> Result<(), String> {
     fs::create_dir_all(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn rename_path(from: String, to: String) -> Result<(), String> {
+pub async fn rename_path(from: String, to: String) -> Result<(), String> {
     fs::rename(&from, &to).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_path(path: String) -> Result<(), String> {
+pub async fn delete_path(path: String) -> Result<(), String> {
     let p = Path::new(&path);
     if p.is_dir() {
         fs::remove_dir_all(p).map_err(|e| e.to_string())

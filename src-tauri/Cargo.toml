@@ -1,6 +1,6 @@
 [package]
 name = "cozycode"
-version = "0.8.1"
+version = "0.8.2"
 description = "CozyCode — a cozy code editor. Rust + Tauri rework of Code - OSS."
 license = "MIT"
 edition = "2021"

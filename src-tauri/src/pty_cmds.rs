@@ -25,7 +25,7 @@ struct PtyOutput {
 }
 
 #[tauri::command]
-pub fn pty_spawn(
+pub async fn pty_spawn(
     app: tauri::AppHandle,
     state: tauri::State<'_, PtyState>,
     cwd: String,
@@ -91,14 +91,14 @@ pub fn pty_spawn(
 }
 
 #[tauri::command]
-pub fn pty_write(state: tauri::State<'_, PtyState>, id: u32, data: String) -> Result<(), String> {
+pub async fn pty_write(state: tauri::State<'_, PtyState>, id: u32, data: String) -> Result<(), String> {
     let mut sessions = state.sessions.lock().unwrap();
     let s = sessions.get_mut(&id).ok_or("no such pty")?;
     s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn pty_resize(state: tauri::State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
+pub async fn pty_resize(state: tauri::State<'_, PtyState>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = state.sessions.lock().unwrap();
     let s = sessions.get(&id).ok_or("no such pty")?;
     s.master
@@ -107,7 +107,7 @@ pub fn pty_resize(state: tauri::State<'_, PtyState>, id: u32, cols: u16, rows: u
 }
 
 #[tauri::command]
-pub fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
+pub async fn pty_kill(state: tauri::State<'_, PtyState>, id: u32) -> Result<(), String> {
     if let Some(mut s) = state.sessions.lock().unwrap().remove(&id) {
         let _ = s.child.kill();
     }

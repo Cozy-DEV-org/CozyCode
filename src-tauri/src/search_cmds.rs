@@ -10,7 +10,7 @@ pub struct SearchMatch {
 
 // for Ctrl+P quick open — respects .gitignore like VSCode
 #[tauri::command]
-pub fn list_files(root: String) -> Result<Vec<String>, String> {
+pub async fn list_files(root: String) -> Result<Vec<String>, String> {
     let output = crate::util::command("rg")
         .args(["--files"])
         .current_dir(&root)
@@ -26,7 +26,7 @@ pub fn list_files(root: String) -> Result<Vec<String>, String> {
 // ponytail: shells out to ripgrep like VSCode itself does; bundle rg.exe with the
 // installer when packaging (Phase 5) so users don't need it on PATH.
 #[tauri::command]
-pub fn search_text(root: String, query: String) -> Result<Vec<SearchMatch>, String> {
+pub async fn search_text(root: String, query: String) -> Result<Vec<SearchMatch>, String> {
     if query.is_empty() {
         return Ok(vec![]);
     }

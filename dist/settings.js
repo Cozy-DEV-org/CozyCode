@@ -637,7 +637,7 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.8.1';
+const APP_VERSION = '0.8.2';
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.

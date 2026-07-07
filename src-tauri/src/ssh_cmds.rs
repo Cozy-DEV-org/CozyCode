@@ -47,7 +47,7 @@ fn connect_session(a: &SshAuth) -> Result<Session, String> {
 }
 
 #[tauri::command]
-pub fn ssh_connect(state: tauri::State<'_, SshState>, id: String, auth: SshAuth) -> Result<String, String> {
+pub async fn ssh_connect(state: tauri::State<'_, SshState>, id: String, auth: SshAuth) -> Result<String, String> {
     let sess = connect_session(&auth)?;
     // resolve home dir for default path convenience
     let mut home = String::new();
@@ -62,8 +62,9 @@ pub fn ssh_connect(state: tauri::State<'_, SshState>, id: String, auth: SshAuth)
 }
 
 #[tauri::command]
-pub fn ssh_disconnect(state: tauri::State<'_, SshState>, id: String) {
+pub async fn ssh_disconnect(state: tauri::State<'_, SshState>, id: String) -> Result<(), String> {
     state.conns.lock().unwrap().remove(&id);
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -74,7 +75,7 @@ pub struct RemoteEntry {
 }
 
 #[tauri::command]
-pub fn ssh_list_dir(state: tauri::State<'_, SshState>, id: String, path: String) -> Result<Vec<RemoteEntry>, String> {
+pub async fn ssh_list_dir(state: tauri::State<'_, SshState>, id: String, path: String) -> Result<Vec<RemoteEntry>, String> {
     let conns = state.conns.lock().unwrap();
     let c = conns.get(&id).ok_or("not connected")?;
     let sftp = c.session.sftp().map_err(|e| e.to_string())?;
@@ -93,7 +94,7 @@ pub fn ssh_list_dir(state: tauri::State<'_, SshState>, id: String, path: String)
 }
 
 #[tauri::command]
-pub fn ssh_read_file(state: tauri::State<'_, SshState>, id: String, path: String) -> Result<String, String> {
+pub async fn ssh_read_file(state: tauri::State<'_, SshState>, id: String, path: String) -> Result<String, String> {
     let conns = state.conns.lock().unwrap();
     let c = conns.get(&id).ok_or("not connected")?;
     let sftp = c.session.sftp().map_err(|e| e.to_string())?;
@@ -104,7 +105,7 @@ pub fn ssh_read_file(state: tauri::State<'_, SshState>, id: String, path: String
 }
 
 #[tauri::command]
-pub fn ssh_write_file(state: tauri::State<'_, SshState>, id: String, path: String, content: String) -> Result<(), String> {
+pub async fn ssh_write_file(state: tauri::State<'_, SshState>, id: String, path: String, content: String) -> Result<(), String> {
     let conns = state.conns.lock().unwrap();
     let c = conns.get(&id).ok_or("not connected")?;
     let sftp = c.session.sftp().map_err(|e| e.to_string())?;
@@ -113,7 +114,7 @@ pub fn ssh_write_file(state: tauri::State<'_, SshState>, id: String, path: Strin
 }
 
 #[tauri::command]
-pub fn ssh_exec(state: tauri::State<'_, SshState>, id: String, cmd: String) -> Result<String, String> {
+pub async fn ssh_exec(state: tauri::State<'_, SshState>, id: String, cmd: String) -> Result<String, String> {
     let conns = state.conns.lock().unwrap();
     let c = conns.get(&id).ok_or("not connected")?;
     let mut ch = c.session.channel_session().map_err(|e| e.to_string())?;
@@ -127,7 +128,7 @@ pub fn ssh_exec(state: tauri::State<'_, SshState>, id: String, cmd: String) -> R
 // ponytail: each forwarded client opens its own SSH session — dead simple and
 // thread-safe; multiplex channels on one session if handshake latency matters.
 #[tauri::command]
-pub fn ssh_forward_start(
+pub async fn ssh_forward_start(
     state: tauri::State<'_, SshState>,
     id: String,
     local_port: u16,
@@ -222,8 +223,9 @@ pub fn ssh_forward_start(
 }
 
 #[tauri::command]
-pub fn ssh_forward_stop(state: tauri::State<'_, SshState>, local_port: u16) {
+pub async fn ssh_forward_stop(state: tauri::State<'_, SshState>, local_port: u16) -> Result<(), String> {
     if let Some(stop) = state.forwards.lock().unwrap().remove(&local_port) {
         stop.store(true, Ordering::Relaxed);
     }
+    Ok(())
 }

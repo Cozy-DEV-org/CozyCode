@@ -16,7 +16,7 @@ pub struct ExtHost {
 pub struct ExtHostState(pub Mutex<Option<ExtHost>>);
 
 #[tauri::command]
-pub fn exthost_start(app: tauri::AppHandle, state: tauri::State<'_, ExtHostState>, ext_dir: String) -> Result<String, String> {
+pub async fn exthost_start(app: tauri::AppHandle, state: tauri::State<'_, ExtHostState>, ext_dir: String) -> Result<String, String> {
     let mut guard = state.0.lock().unwrap();
     if let Some(mut old) = guard.take() {
         let _ = old.child.kill();
@@ -61,15 +61,16 @@ pub fn exthost_start(app: tauri::AppHandle, state: tauri::State<'_, ExtHostState
 }
 
 #[tauri::command]
-pub fn exthost_send(state: tauri::State<'_, ExtHostState>, line: String) -> Result<(), String> {
+pub async fn exthost_send(state: tauri::State<'_, ExtHostState>, line: String) -> Result<(), String> {
     let mut guard = state.0.lock().unwrap();
     let h = guard.as_mut().ok_or("extension host not running")?;
     writeln!(h.stdin, "{}", line).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn exthost_stop(state: tauri::State<'_, ExtHostState>) {
+pub async fn exthost_stop(state: tauri::State<'_, ExtHostState>) -> Result<(), String> {
     if let Some(mut h) = state.0.lock().unwrap().take() {
         let _ = h.child.kill();
     }
+    Ok(())
 }

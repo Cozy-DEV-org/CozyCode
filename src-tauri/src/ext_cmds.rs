@@ -30,7 +30,7 @@ fn run_ps(script: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn ext_search(query: String) -> Result<String, String> {
+pub async fn ext_search(query: String) -> Result<String, String> {
     let q: String = query
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-'))
@@ -42,7 +42,7 @@ pub fn ext_search(query: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn ext_install(namespace: String, name: String, version: String) -> Result<String, String> {
+pub async fn ext_install(namespace: String, name: String, version: String) -> Result<String, String> {
     let (ns, nm, ver) = (sanitize(&namespace), sanitize(&name), sanitize(&version));
     if ns.is_empty() || nm.is_empty() || ver.is_empty() {
         return Err("invalid extension id".into());
@@ -62,7 +62,7 @@ pub fn ext_install(namespace: String, name: String, version: String) -> Result<S
 }
 
 #[tauri::command]
-pub fn ext_uninstall(id: String) -> Result<(), String> {
+pub async fn ext_uninstall(id: String) -> Result<(), String> {
     let dir = ext_root()?.join(sanitize(&id));
     std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())
 }
@@ -84,7 +84,7 @@ pub struct ExtInfo {
 }
 
 #[tauri::command]
-pub fn ext_list() -> Result<Vec<ExtInfo>, String> {
+pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
     let root = ext_root()?;
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())?.flatten() {
