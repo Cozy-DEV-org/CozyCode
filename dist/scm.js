@@ -253,7 +253,7 @@ function renderScmItem(repo, f) {
 	if (f.staged) row.appendChild(mk('remove', 'Unstage', () => invoke('git_unstage', { repo: repo.path, path: f.path })));
 	else {
 		row.appendChild(mk('discard', 'Discard Changes', async () => {
-			if (!confirm(`Discard changes in ${f.path}? This cannot be undone.`)) return;
+			if (!(await confirmDialog(`Discard changes in ${f.path}?`, 'This cannot be undone.'))) return;
 			await invoke('git_discard', { repo: repo.path, path: f.path });
 		}));
 		row.appendChild(mk('add', 'Stage', () => invoke('git_stage', { repo: repo.path, path: f.path })));

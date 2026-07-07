@@ -106,30 +106,94 @@ async function renderDir(dir, container, depth) {
 				openFile(e.path, { preview: true });
 			};
 			item.ondblclick = () => pinFile(e.path);
+			item.oncontextmenu = ev => { ev.preventDefault(); fileContextMenu(e, ev.clientX, ev.clientY); };
 		}
+		if (e.is_dir) item.oncontextmenu = ev => { ev.preventDefault(); dirContextMenu(e, item.nextElementSibling, depth, ev.clientX, ev.clientY); };
 	}
 }
 
-async function newFile() {
-	if (!state.root) return;
-	const name = prompt('File name (relative to root):');
-	if (!name) return;
-	const p = joinPath(state.root, name);
-	try { state.remote ? await FS.writeFile(p, '') : await invoke('create_file', { path: p }); }
-	catch (e) { toast(e); return; }
-	state.fileList = null;
-	renderTree();
-	openFile(p);
+/* ---- context menus ---- */
+function fileContextMenu(e, x, y) {
+	const repo = Git.repoOf ? Git.repoOf(e.path) : null;
+	contextMenu(x, y, [
+		{ label: 'Open', run: () => pinFile(e.path) },
+		{ label: 'Open to the Side', key: 'Ctrl+Enter', run: () => openFile(e.path, { preview: false }) },
+		'-',
+		{ label: 'Add File to Chat', run: () => Claude.addFileToChat && Claude.addFileToChat(e.path) },
+		'-',
+		{ label: 'Copy Path', key: 'Shift+Alt+C', run: () => navigator.clipboard.writeText(e.path) },
+		{ label: 'Copy Relative Path', run: () => navigator.clipboard.writeText(state.root ? e.path.replace(state.root, '').replace(/^[\\/]/, '') : e.path) },
+		'-',
+		{ label: 'Rename...', key: 'F2', run: () => renameEntry(e) },
+		{ label: 'Delete', key: 'Del', run: () => deleteEntry(e) },
+	]);
 }
-async function newFolder() {
-	if (!state.root || state.remote) { toast('New folder: local only for now'); return; }
-	const name = prompt('Folder name (relative to root):');
-	if (!name) return;
-	try { await invoke('create_dir', { path: joinPath(state.root, name) }); } catch (e) { toast(e); return; }
-	renderTree();
+function dirContextMenu(e, childBox, depth, x, y) {
+	contextMenu(x, y, [
+		{ label: 'New File...', run: () => { expandDir(e, childBox, depth); inlineCreate(childBox, depth + 1, false, e.path); } },
+		{ label: 'New Folder...', run: () => { expandDir(e, childBox, depth); inlineCreate(childBox, depth + 1, true, e.path); } },
+		'-',
+		{ label: 'Copy Path', run: () => navigator.clipboard.writeText(e.path) },
+		'-',
+		{ label: 'Rename...', key: 'F2', run: () => renameEntry(e) },
+		{ label: 'Delete', key: 'Del', run: () => deleteEntry(e) },
+	]);
 }
 
+async function expandDir(e, childBox, depth) {
+	if (!state.expanded.has(e.path)) { state.expanded.add(e.path); await renderDir(e.path, childBox, depth + 1); }
+}
+
+async function deleteEntry(e) {
+	if (!(await confirmDialog(`Delete '${e.name}'?`, 'This cannot be undone.'))) return;
+	try { state.remote ? await invoke('ssh_exec', { id: state.remote.id, cmd: `rm -rf ${JSON.stringify(e.path)}` }) : await invoke('delete_path', { path: e.path }); }
+	catch (err) { toast(err); return; }
+	state.fileList = null; renderTree();
+}
+async function renameEntry(e) {
+	const val = await nativePrompt('Rename', e.name);
+	if (!val || val === e.name) return;
+	const dir = e.path.slice(0, e.path.length - e.name.length);
+	try { await invoke('rename_path', { from: e.path, to: dir + val }); } catch (err) { toast(err); return; }
+	state.fileList = null; renderTree();
+}
+
+// inline create: add a tree row with an <input> to type the name directly
+function inlineCreate(container, depth, isDir, parentPath) {
+	const row = document.createElement('div');
+	row.className = 'tree-item';
+	row.style.paddingLeft = (depth * 10 + 4) + 'px';
+	row.innerHTML = `<span class="twist"></span>`;
+	row.appendChild(fileIconImg(isDir ? 'newfolder' : 'newfile', isDir));
+	const input = document.createElement('input');
+	input.className = 'tree-input';
+	container.prepend(row);
+	row.appendChild(input);
+	input.focus();
+	let done = false;
+	const submit = async () => {
+		if (done) return; done = true;
+		const name = input.value.trim();
+		row.remove();
+		if (!name) return;
+		const p = joinPath(parentPath || state.root, name);
+		try {
+			if (isDir) { state.remote ? await invoke('ssh_exec', { id: state.remote.id, cmd: `mkdir -p ${JSON.stringify(p)}` }) : await invoke('create_dir', { path: p }); }
+			else { state.remote ? await FS.writeFile(p, '') : await invoke('create_file', { path: p }); }
+		} catch (e) { toast(e); return; }
+		state.fileList = null;
+		await renderTree();
+		if (!isDir) openFile(p);
+	};
+	input.onkeydown = ev => { if (ev.key === 'Enter') submit(); if (ev.key === 'Escape') { done = true; row.remove(); } };
+	input.onblur = submit;
+}
+
+async function newFile() { if (state.root) inlineCreate($('#tree'), 0, false, state.root); }
+async function newFolder() { if (state.root) inlineCreate($('#tree'), 0, true, state.root); }
+
 /* ================= search ================= */
+const searchOpts = { regex: false, case: false };
 async function runSearch() {
 	if (!state.root) return;
 	const q = $('#search-input').value;
@@ -144,7 +208,7 @@ async function runSearch() {
 	}
 	box.innerHTML = '<div class="search-file">Searching...</div>';
 	let results;
-	try { results = await invoke('search_text', { root: state.root, query: q }); }
+	try { results = await invoke('search_text', { root: state.root, query: q, regex: searchOpts.regex, case: searchOpts.case }); }
 	catch (e) { box.innerHTML = `<div class="search-file">${esc(String(e))}</div>`; return; }
 	box.innerHTML = '';
 	let lastFile = null;
@@ -206,6 +270,26 @@ async function quickOpen() {
 		run: () => openFile(joinPath(state.root, f.replace(/\//g, state.remote ? '/' : '\\'))),
 	})), 'Search files by name (type > for commands)');
 }
+
+async function replaceAll() {
+	if (!state.root || state.remote) { toast('Replace: local workspace only'); return; }
+	const find = $('#search-input').value, replace = $('#replace-input').value;
+	if (!find) return;
+	if (!(await confirmDialog(`Replace all "${find}" with "${replace}"?`, 'Applies across the workspace. This cannot be undone.'))) return;
+	try {
+		const n = await invoke('search_replace', { root: state.root, find, replace, regex: searchOpts.regex, case: searchOpts.case });
+		toast(`Replaced in ${n} file(s)`);
+		// reload any open tabs whose content changed on disk
+		for (const t of state.tabs) if (t.kind === 'file' && t.path && !t.dirty) { try { t.model.setValue(await FS.readFile(t.path)); } catch { } }
+		runSearch();
+	} catch (e) { toast('Replace failed: ' + e); }
+}
+
+// wire search toggles + replace
+$('#search-case').onclick = () => { searchOpts.case = !searchOpts.case; $('#search-case').classList.toggle('on', searchOpts.case); runSearch(); };
+$('#search-regex').onclick = () => { searchOpts.regex = !searchOpts.regex; $('#search-regex').classList.toggle('on', searchOpts.regex); runSearch(); };
+$('#replace-all').onclick = replaceAll;
+$('#replace-input').addEventListener('keydown', e => { if (e.key === 'Enter') replaceAll(); });
 
 Object.assign(Explorer, { openFolder, renderTree, runSearch });
 window.openFolder = openFolder;

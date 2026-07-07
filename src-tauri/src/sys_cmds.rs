@@ -15,15 +15,19 @@ fn exists(p: &str) -> bool {
 
 fn which(exe: &str) -> Option<String> {
     let out = crate::util::command("where").arg(exe).output().ok()?;
-    if out.status.success() {
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .next()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    } else {
-        None
+    if !out.status.success() {
+        return None;
     }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let paths: Vec<&str> = text.lines().map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    // prefer a Windows-runnable file (.cmd/.exe/.bat) — `where` also lists the
+    // extension-less unix shim (e.g. npm's `claude`) which CreateProcess can't run.
+    for ext in [".cmd", ".exe", ".bat", ".com"] {
+        if let Some(p) = paths.iter().find(|p| p.to_lowercase().ends_with(ext)) {
+            return Some(p.to_string());
+        }
+    }
+    paths.first().map(|s| s.to_string())
 }
 
 // Detect the shells actually present on this machine, in VSCode-ish preference order.

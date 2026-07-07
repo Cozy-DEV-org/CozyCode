@@ -96,6 +96,15 @@ async function attachFilePick() {
 	renderAttachments();
 }
 
+async function addFileToChat(path) {
+	try {
+		const content = await FS.readFile(path);
+		attachments.push({ kind: 'file', name: basename(path), path, content });
+		openAux(); setMode('chat'); renderAttachments();
+		toast('Added ' + basename(path) + ' to chat', 2000);
+	} catch (e) { toast(e); }
+}
+
 function addSelectionToChat() {
 	const ctx = activeFileContext();
 	if (!ctx || !ctx.selection) { toast('Select text in the editor first'); return; }
@@ -320,4 +329,4 @@ $('#aux-resizer').addEventListener('mousedown', e => {
 	document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
 });
 
-Object.assign(Claude, { toggleAux, openAux, closeAux });
+Object.assign(Claude, { toggleAux, openAux, closeAux, addFileToChat });

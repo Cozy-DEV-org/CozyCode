@@ -433,7 +433,7 @@ async function githubLogin() {
 }
 
 async function githubLoginPAT() {
-	const token = prompt('Paste a GitHub Personal Access Token (repo scope).\nCreate at: github.com/settings/tokens');
+	const token = await nativePrompt('GitHub Personal Access Token', '', 'ghp_... (repo scope, from github.com/settings/tokens)');
 	if (!token) return;
 	try { await finishLogin(token); } catch (e) { toast('GitHub sign-in failed: ' + e); }
 }
@@ -503,9 +503,9 @@ async function createPR(repo) {
 		if (!m) { toast('origin is not a GitHub repo'); return; }
 		const [, owner, name] = m;
 		const base = await invoke('git_default_branch', { repo: repo.path });
-		const title = prompt('Pull Request title:', repo.branch.replace(/[-_]/g, ' '));
+		const title = await nativePrompt('Pull Request title', repo.branch.replace(/[-_]/g, ' '));
 		if (!title) return;
-		const body = prompt('Description (optional):', '') || '';
+		const body = (await nativePrompt('Description (optional)', '')) || '';
 		await invoke('git_push', { repo: repo.path }).catch(() => { });
 		const res = JSON.parse(await invoke('gh_api', {
 			token, method: 'POST', path: `/repos/${owner}/${name}/pulls`,
@@ -671,7 +671,7 @@ function zoomOut() { zoomLevel = Math.max(0.5, +(zoomLevel - 0.1).toFixed(2)); a
 function zoomReset() { zoomLevel = 1; applyZoom(); }
 applyZoom();
 
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.10.0';
 
 // Self-update via the Tauri updater plugin. `silent` = startup auto-check (no UI
 // unless an update is found and not skipped). Otherwise report status into `el`.

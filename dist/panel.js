@@ -25,6 +25,7 @@ function switchPanelTab(name) {
 	if (name === 'terminal') { if (!terminals.length) newTerminal(); else { activeTerm && activeTerm.fit.fit(); activeTerm && activeTerm.term.focus(); } }
 	if (name === 'ports') renderPorts();
 	if (name === 'problems') renderProblems();
+	if (name === 'output') renderOutput();
 }
 
 // auto-detect installed shells once; cache on state

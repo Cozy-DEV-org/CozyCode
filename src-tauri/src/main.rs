@@ -35,6 +35,7 @@ fn main() {
             fs_cmds::rename_path,
             fs_cmds::delete_path,
             search_cmds::search_text,
+            search_cmds::search_replace,
             search_cmds::list_files,
             git_cmds::git_info,
             git_cmds::git_status,

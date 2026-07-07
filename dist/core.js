@@ -34,6 +34,65 @@ window.addEventListener('unhandledrejection', e => {
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
+
+// ---- hide the fact this is a WebView: no browser context menu, no devtools ----
+window.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('keydown', e => {
+	const k = (e.key || '').toLowerCase();
+	if (k === 'f12') { e.preventDefault(); return; }
+	if (e.ctrlKey && e.shiftKey && (k === 'i' || k === 'j' || k === 'c')) { e.preventDefault(); return; }
+	if (e.ctrlKey && !e.shiftKey && k === 'u') { e.preventDefault(); return; } // view-source
+}, true);
+
+// ---- Output console: capture logs + app events, shown in the OUTPUT panel ----
+const _logBuf = [];
+function cozyLog(source, msg, level = 'info') {
+	const time = new Date().toTimeString().slice(0, 8);
+	_logBuf.push({ time, source, msg: String(msg).slice(0, 2000), level });
+	if (_logBuf.length > 1000) _logBuf.shift();
+	const box = document.getElementById('output-log');
+	if (box && !document.getElementById('pane-output').classList.contains('hidden')) appendLog(box, _logBuf[_logBuf.length - 1]);
+}
+function appendLog(box, e) {
+	const d = document.createElement('div');
+	d.className = 'log-line log-' + e.level;
+	d.innerHTML = `<span class="log-time">${e.time}</span><span class="log-src">[${esc(e.source)}]</span> ${esc(e.msg)}`;
+	box.appendChild(d);
+	box.scrollTop = 1e9;
+}
+function renderOutput() {
+	const box = document.getElementById('output-log');
+	box.innerHTML = '';
+	for (const e of _logBuf) appendLog(box, e);
+}
+// mirror console.* into the output panel (keep native console too)
+for (const lvl of ['log', 'warn', 'error']) {
+	const orig = console[lvl].bind(console);
+	console[lvl] = (...a) => { orig(...a); try { cozyLog('console', a.join(' '), lvl === 'log' ? 'info' : lvl); } catch { } };
+}
+
+// native-looking context menu built from our own components (not the WebView's)
+function contextMenu(x, y, items) {
+	$$('.ctx-menu').forEach(m => m.remove());
+	const menu = document.createElement('div');
+	menu.className = 'ctx-menu menu-dropdown';
+	for (const it of items) {
+		if (it === '-') { const s = document.createElement('div'); s.className = 'menu-sep'; menu.appendChild(s); continue; }
+		const d = document.createElement('div');
+		d.className = 'menu-item' + (it.disabled ? ' disabled' : '');
+		d.innerHTML = `<span>${esc(it.label)}</span><span class="keybind">${esc(it.key || '')}</span>`;
+		if (!it.disabled) d.onclick = () => { menu.remove(); it.run(); };
+		menu.appendChild(d);
+	}
+	document.body.appendChild(menu);
+	// keep on-screen
+	const r = menu.getBoundingClientRect();
+	menu.style.left = Math.min(x, window.innerWidth - r.width - 4) + 'px';
+	menu.style.top = Math.min(y, window.innerHeight - r.height - 4) + 'px';
+	const close = e => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', close); } };
+	setTimeout(() => document.addEventListener('mousedown', close), 0);
+	return menu;
+}
 const basename = p => String(p).replace(/[\\/]+$/, '').split(/[\\/]/).pop();
 const dirname = p => { const parts = String(p).split(/[\\/]/); parts.pop(); return parts.join('/'); };
 const esc = s => { const d = document.createElement('span'); d.textContent = s == null ? '' : s; return d.innerHTML; };
@@ -45,6 +104,7 @@ function toast(msg, ms = 3500) {
 	t.classList.remove('hidden');
 	clearTimeout(t._h);
 	t._h = setTimeout(() => t.classList.add('hidden'), ms);
+	try { cozyLog('app', msg); } catch { }
 }
 
 /* ---- filesystem abstraction: local (Rust fs) or remote (Rust sftp) ---- */
@@ -555,6 +615,49 @@ async function closeTab(key) {
 	} else renderTabs();
 }
 
+// native-looking prompt (replaces window.prompt so no "tauri.localhost says")
+function nativePrompt(title, initial = '', placeholder = '') {
+	return new Promise(resolve => {
+		const overlay = document.createElement('div');
+		overlay.className = 'modal-overlay';
+		overlay.innerHTML = `<div class="modal">
+			<div class="modal-title">${esc(title)}</div>
+			<input class="modal-input" type="text" value="${esc(initial)}" placeholder="${esc(placeholder)}">
+			<div class="modal-btns">
+				<button class="modal-btn" data-c="cancel">Cancel</button>
+				<button class="modal-btn primary" data-c="ok">OK</button>
+			</div></div>`;
+		const inp = overlay.querySelector('.modal-input');
+		const done = v => { overlay.remove(); document.removeEventListener('keydown', onKey, true); resolve(v); };
+		overlay.querySelector('[data-c=ok]').onclick = () => done(inp.value);
+		overlay.querySelector('[data-c=cancel]').onclick = () => done(null);
+		const onKey = e => { if (e.key === 'Enter') { e.preventDefault(); done(inp.value); } if (e.key === 'Escape') done(null); };
+		document.addEventListener('keydown', onKey, true);
+		document.body.appendChild(overlay);
+		inp.focus(); inp.select();
+	});
+}
+
+// native-looking confirm (replaces window.confirm)
+function confirmDialog(title, msg = '') {
+	return new Promise(resolve => {
+		const overlay = document.createElement('div');
+		overlay.className = 'modal-overlay';
+		overlay.innerHTML = `<div class="modal">
+			<div class="modal-title">${esc(title)}</div>
+			${msg ? `<div class="modal-msg">${esc(msg)}</div>` : ''}
+			<div class="modal-btns">
+				<button class="modal-btn" data-c="no">Cancel</button>
+				<button class="modal-btn primary" data-c="yes">OK</button>
+			</div></div>`;
+		const done = v => { overlay.remove(); resolve(v); };
+		overlay.querySelector('[data-c=yes]').onclick = () => done(true);
+		overlay.querySelector('[data-c=no]').onclick = () => done(false);
+		document.body.appendChild(overlay);
+		overlay.querySelector('[data-c=yes]').focus();
+	});
+}
+
 // VSCode-style 3-button unsaved dialog: Save / Don't Save / Cancel
 function confirmSave(name) {
 	return new Promise(resolve => {
@@ -597,6 +700,16 @@ function renderTabs() {
 		d.onclick = () => activateTab(t.key);
 		d.ondblclick = () => { if (t.path) pinFile(t.path); };
 		d.onauxclick = e => { if (e.button === 1) closeTab(t.key); };
+		d.oncontextmenu = e => {
+			e.preventDefault();
+			contextMenu(e.clientX, e.clientY, [
+				{ label: 'Close', key: 'Ctrl+W', run: () => closeTab(t.key) },
+				{ label: 'Close Others', run: () => state.tabs.filter(x => x.key !== t.key).map(x => x.key).forEach(closeTab) },
+				{ label: 'Close All', run: () => state.tabs.map(x => x.key).forEach(closeTab) },
+				'-',
+				{ label: 'Copy Path', run: () => t.path && navigator.clipboard.writeText(t.path), disabled: !t.path },
+			]);
+		};
 		el.appendChild(d);
 	}
 }

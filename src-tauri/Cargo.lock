@@ -394,10 +394,11 @@ dependencies = [
 
 [[package]]
 name = "cozycode"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "git2",
  "portable-pty",
+ "regex",
  "serde",
  "serde_json",
  "ssh2",
