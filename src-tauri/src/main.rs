@@ -3,7 +3,6 @@
 
 mod ai_cmds;
 mod ext_cmds;
-mod exthost_cmds;
 mod fs_cmds;
 mod gh_cmds;
 mod git_cmds;
@@ -32,7 +31,6 @@ fn main() {
         })
         .manage(pty_cmds::PtyState::default())
         .manage(ssh_cmds::SshState::default())
-        .manage(exthost_cmds::ExtHostState::default())
         .manage(tunnel_cmds::TunnelState::default())
         .invoke_handler(tauri::generate_handler![
             fs_cmds::list_dir,
@@ -65,13 +63,13 @@ fn main() {
             git_cmds::git_push,
             git_cmds::git_pull,
             git_cmds::git_stage_all,
-            ext_cmds::ext_search,
-            ext_cmds::ext_install,
+            ext_cmds::ext_import,
+            ext_cmds::ext_install_url,
             ext_cmds::ext_uninstall,
             ext_cmds::ext_list,
             ext_cmds::ext_set_state,
             ext_cmds::ext_disabled_ids,
-            ext_cmds::import_vscode_extensions,
+            ext_cmds::ext_marketplace,
             ai_cmds::ai_models,
             git_cmds::git_merge,
             git_cmds::git_remote_url,
@@ -103,9 +101,6 @@ fn main() {
             misc_cmds::settings_read,
             misc_cmds::settings_write,
             misc_cmds::run_formatter,
-            exthost_cmds::exthost_start,
-            exthost_cmds::exthost_send,
-            exthost_cmds::exthost_stop,
             pty_cmds::pty_spawn,
             pty_cmds::pty_write,
             pty_cmds::pty_resize,
@@ -118,7 +113,6 @@ fn main() {
                 use tauri::Manager;
                 let app = window.app_handle();
                 pty_cmds::kill_all(&app.state());
-                exthost_cmds::kill(&app.state());
                 tunnel_cmds::kill_all(&app.state());
                 if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                     app.exit(0);

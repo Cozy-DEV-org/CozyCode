@@ -12,3 +12,6 @@ Thumbs.db
 
 # Local caches
 *.log
+
+# built extension packages
+*.cext

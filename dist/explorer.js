@@ -21,8 +21,8 @@ async function openFolder(dir) {
 	HotExit.restore();
 }
 
-// Interop with other IDEs: read .vscode/settings.json, .editorconfig,
-// .vscode/extensions.json recommendations. .cursor/.claude/.github show in the tree.
+// Interop with other IDEs: read .vscode/settings.json and .editorconfig.
+// .cursor/.claude/.github show in the tree.
 async function loadWorkspaceConfig(dir) {
 	// .vscode/settings.json -> editor settings
 	try {
@@ -47,11 +47,6 @@ async function loadWorkspaceConfig(dir) {
 		applyEditorSettings();
 	} catch { /* none */ }
 
-	// .vscode/extensions.json recommendations -> stash for Extensions view
-	try {
-		const rec = JSON.parse(await FS.readFile(dir + '\\.vscode\\extensions.json'));
-		state.workspaceRecommend = rec.recommendations || [];
-	} catch { state.workspaceRecommend = []; }
 }
 
 function setWindowTitle(name) {

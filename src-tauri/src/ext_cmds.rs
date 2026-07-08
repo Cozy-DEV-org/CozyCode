@@ -1,9 +1,15 @@
-// Extension support via Open VSX registry (open-vsx.org).
-// ponytail: downloads/extracts via PowerShell — zero extra Rust deps; swap to
-// ureq+zip crates if PS startup latency (~1s) ever matters.
+// CozyCode native extensions.
+//
+// An extension is a folder with a `cozy.json` manifest + a web entry (HTML/JS/CSS),
+// packaged as a `.cext` file — which is just a `.zip` with a different extension, so
+// a plain `.zip` imports identically. No VS Code, no Open VSX, no Node sidecar: each
+// extension runs as a sandboxed iframe in the workbench and talks to CozyCode through
+// the small `cozy` API (see wiki/Writing-Extensions.md).
+//
+// ponytail: extraction uses PowerShell Expand-Archive — zero extra Rust deps; swap to
+// the `zip` crate if PS startup latency (~1s per import) ever matters.
 use serde::Serialize;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 fn ext_root() -> Result<PathBuf, String> {
     let dir = crate::util::data_dir().join("extensions");
@@ -23,56 +29,10 @@ fn run_ps(script: &str) -> Result<String, String> {
         .output()
         .map_err(|e| e.to_string())?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).into_owned())
     }
-}
-
-#[tauri::command]
-pub async fn ext_search(query: String) -> Result<String, String> {
-    let q: String = query
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '.' | '_' | '-'))
-        .collect::<String>()
-        .replace(' ', "%20");
-    run_ps(&format!(
-        "(Invoke-RestMethod 'https://open-vsx.org/api/-/search?query={q}&size=24&sortBy=downloadCount') | ConvertTo-Json -Depth 10 -Compress"
-    ))
-}
-
-#[tauri::command]
-pub async fn ext_install(namespace: String, name: String, version: String) -> Result<String, String> {
-    let (ns, nm, ver) = (sanitize(&namespace), sanitize(&name), sanitize(&version));
-    if ns.is_empty() || nm.is_empty() {
-        return Err("invalid extension id".into());
-    }
-    let ver = if ver.is_empty() { "latest".to_string() } else { ver };
-    let id = format!("{ns}.{nm}");
-    let dest = ext_root()?.join(&id);
-    let dest_s = dest.to_string_lossy().into_owned();
-    // Resolve the real .vsix URL from Open VSX metadata instead of building the file
-    // URL by hand: the registry stores namespace/name with their published casing
-    // (e.g. golang.Go, not golang.go) so a hand-built URL 404s. Prefer the win32-x64
-    // build when the extension is platform-specific, else fall back to universal.
-    let script = format!(
-        "$ErrorActionPreference='Stop'; $tmp = Join-Path $env:TEMP 'cozyext.zip'; $dl=$null; \
-         foreach ($u in @('https://open-vsx.org/api/{ns}/{nm}/win32-x64/{ver}','https://open-vsx.org/api/{ns}/{nm}/{ver}')) {{ \
-           try {{ $m = Invoke-RestMethod $u; if ($m.files.download) {{ $dl = $m.files.download; break }} }} catch {{}} }} \
-         if (-not $dl) {{ throw 'Not on Open VSX (this extension may be VS Code Marketplace-only).' }}; \
-         Invoke-WebRequest -Uri $dl -OutFile $tmp; \
-         Remove-Item -Recurse -Force '{dest_s}' -ErrorAction SilentlyContinue; \
-         Expand-Archive -Path $tmp -DestinationPath '{dest_s}' -Force; \
-         Remove-Item $tmp -ErrorAction SilentlyContinue"
-    );
-    run_ps(&script)?;
-    Ok(id)
-}
-
-#[tauri::command]
-pub async fn ext_uninstall(id: String) -> Result<(), String> {
-    let dir = ext_root()?.join(sanitize(&id));
-    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
@@ -85,16 +45,18 @@ pub struct ThemeContrib {
 #[derive(Serialize)]
 pub struct ExtInfo {
     pub id: String,
-    pub display_name: String,
-    pub description: String,
+    pub name: String,
     pub version: String,
+    pub description: String,
+    pub icon: String,   // absolute path of the manifest icon, "" if none
+    pub main: String,   // absolute path of the entry html, "" if none
+    pub root: String,   // absolute dir holding cozy.json (the asset root)
+    pub contributes: serde_json::Value,
     pub themes: Vec<ThemeContrib>,
     pub enabled: bool,
-    pub auto_update: bool,
-    pub icon: String, // absolute path of the extension's icon image, "" if none
 }
 
-// per-extension state (enabled / auto-update) stored in data/extensions/.state.json
+// per-extension enabled state, stored in data/extensions/.state.json
 fn state_path() -> Result<PathBuf, String> {
     Ok(ext_root()?.join(".state.json"))
 }
@@ -110,13 +72,13 @@ fn write_state(v: &serde_json::Value) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn ext_set_state(id: String, enabled: bool, auto_update: bool) -> Result<(), String> {
+pub async fn ext_set_state(id: String, enabled: bool) -> Result<(), String> {
     let mut s = read_state();
-    s[&id] = serde_json::json!({ "enabled": enabled, "autoUpdate": auto_update });
+    s[&id] = serde_json::json!({ "enabled": enabled });
     write_state(&s)
 }
 
-// ids that are disabled -> exthost skips them
+// ids the user disabled -> the frontend loader skips them
 #[tauri::command]
 pub async fn ext_disabled_ids() -> Vec<String> {
     let s = read_state();
@@ -125,36 +87,83 @@ pub async fn ext_disabled_ids() -> Vec<String> {
         .unwrap_or_default()
 }
 
-// One-time import of installed VS Code extensions into CozyCode's ext dir.
 #[tauri::command]
-pub async fn import_vscode_extensions() -> Result<u32, String> {
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).map_err(|e| e.to_string())?;
-    let src = std::path::Path::new(&home).join(".vscode").join("extensions");
-    if !src.exists() {
-        return Ok(0);
-    }
-    let dest = ext_root()?;
-    let mut n = 0u32;
-    for entry in std::fs::read_dir(&src).map_err(|e| e.to_string())?.flatten() {
-        let p = entry.path();
-        if !p.is_dir() {
-            continue;
-        }
-        // VS Code stores each extension as <publisher>.<name>-<version>; keep the id
-        let raw = entry.file_name().to_string_lossy().into_owned();
-        let id: String = raw.rsplitn(2, '-').last().unwrap_or(&raw).to_string();
-        let target = dest.join(sanitize(&id)).join("extension");
-        if target.exists() {
-            continue;
-        }
-        if copy_dir(&p, &target).is_ok() {
-            n += 1;
-        }
-    }
-    Ok(n)
+pub async fn ext_uninstall(id: String) -> Result<(), String> {
+    let dir = ext_root()?.join(sanitize(&id));
+    std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())
 }
 
-fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+// Import a .cext / .zip from disk. Extracts, locates cozy.json (root or one level
+// deep), reads the id, and installs into data/extensions/<id>. Returns the id.
+#[tauri::command]
+pub async fn ext_import(path: String) -> Result<String, String> {
+    let src = PathBuf::from(&path);
+    if !src.is_file() {
+        return Err("file not found".into());
+    }
+    let src_s = src.to_string_lossy().replace('\'', "''");
+    // Expand-Archive only accepts a .zip name — copy to a temp .zip first (this makes
+    // .cext work), extract into a fresh temp dir, print the dir back.
+    let tmp = run_ps(&format!(
+        "$ErrorActionPreference='Stop'; $t = Join-Path $env:TEMP ('cozyimp_' + [guid]::NewGuid().ToString('N')); \
+         $z = \"$t.zip\"; Copy-Item -LiteralPath '{src_s}' -Destination $z -Force; \
+         Expand-Archive -LiteralPath $z -DestinationPath $t -Force; Remove-Item $z -Force; Write-Output $t"
+    ))?;
+    let tmp = PathBuf::from(tmp.trim());
+    let res = install_from_dir(&tmp);
+    let _ = std::fs::remove_dir_all(&tmp);
+    res
+}
+
+// Download a .cext from a URL (marketplace "Install") then import it. The frontend
+// asks the user before calling this — downloads are an explicit-permission action.
+#[tauri::command]
+pub async fn ext_install_url(url: String) -> Result<String, String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("invalid url".into());
+    }
+    let u = url.replace('\'', "''");
+    let tmp = run_ps(&format!(
+        "$ErrorActionPreference='Stop'; $f = Join-Path $env:TEMP ('cozydl_' + [guid]::NewGuid().ToString('N') + '.cext'); \
+         Invoke-WebRequest -Uri '{u}' -OutFile $f; Write-Output $f"
+    ))?;
+    let tmp = PathBuf::from(tmp.trim());
+    let res = ext_import(tmp.to_string_lossy().into_owned()).await;
+    let _ = std::fs::remove_file(&tmp);
+    res
+}
+
+// Find cozy.json under `dir` (root, else one level down), read its id, copy that
+// folder into data/extensions/<id>.
+fn install_from_dir(dir: &Path) -> Result<String, String> {
+    let manifest_dir = find_manifest_dir(dir).ok_or("no cozy.json in package")?;
+    let raw = std::fs::read_to_string(manifest_dir.join("cozy.json")).map_err(|e| e.to_string())?;
+    let pkg: serde_json::Value = serde_json::from_str(&raw).map_err(|e| format!("bad cozy.json: {e}"))?;
+    let id = pkg["id"]
+        .as_str()
+        .map(sanitize)
+        .filter(|s| !s.is_empty())
+        .ok_or("cozy.json missing \"id\"")?;
+    let dest = ext_root()?.join(&id);
+    let _ = std::fs::remove_dir_all(&dest);
+    copy_dir(&manifest_dir, &dest).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
+fn find_manifest_dir(dir: &Path) -> Option<PathBuf> {
+    if dir.join("cozy.json").is_file() {
+        return Some(dir.to_path_buf());
+    }
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if p.is_dir() && p.join("cozy.json").is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for e in std::fs::read_dir(src)?.flatten() {
         let from = e.path();
@@ -178,39 +187,51 @@ pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
         if id.starts_with('.') {
             continue; // .state.json / partial installs
         }
-        let ext_dir = entry.path().join("extension");
-        let pkg_path = ext_dir.join("package.json");
-        let Ok(raw) = std::fs::read_to_string(&pkg_path) else { continue };
+        let dir = entry.path();
+        let Ok(raw) = std::fs::read_to_string(dir.join("cozy.json")) else { continue };
         let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
-        let st = &state[&id];
+        let rel_abs = |rel: &str| dir.join(rel).to_string_lossy().into_owned();
+        let icon = pkg["icon"].as_str().map(|r| dir.join(r)).filter(|p| p.exists()).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        let main = pkg["main"].as_str().unwrap_or("index.html");
+        let main_abs = dir.join(main);
         let mut themes = Vec::new();
         if let Some(arr) = pkg["contributes"]["themes"].as_array() {
             for t in arr {
                 let Some(rel) = t["path"].as_str() else { continue };
                 themes.push(ThemeContrib {
                     label: t["label"].as_str().unwrap_or(rel).to_string(),
-                    path: ext_dir.join(rel).to_string_lossy().into_owned(),
+                    path: rel_abs(rel),
                     ui_theme: t["uiTheme"].as_str().unwrap_or("vs-dark").to_string(),
                 });
             }
         }
-        let display = pkg["displayName"].as_str().unwrap_or(&id);
-        let icon = pkg["icon"]
-            .as_str()
-            .map(|rel| ext_dir.join(rel))
-            .filter(|p| p.exists())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
         out.push(ExtInfo {
             id: id.clone(),
-            display_name: if display.starts_with('%') { id.clone() } else { display.to_string() },
+            name: pkg["name"].as_str().unwrap_or(&id).to_string(),
+            version: pkg["version"].as_str().unwrap_or("0.0.0").to_string(),
             description: pkg["description"].as_str().unwrap_or("").chars().take(200).collect(),
-            version: pkg["version"].as_str().unwrap_or("").to_string(),
-            themes,
-            enabled: st["enabled"] != serde_json::json!(false), // default enabled
-            auto_update: st["autoUpdate"] == serde_json::json!(true),
             icon,
+            main: if main_abs.exists() { main_abs.to_string_lossy().into_owned() } else { String::new() },
+            root: dir.to_string_lossy().into_owned(),
+            contributes: pkg["contributes"].clone(),
+            themes,
+            enabled: state[&id]["enabled"] != serde_json::json!(false), // default enabled
         });
     }
     Ok(out)
+}
+
+// Workspace-hosted marketplace index: a repo can ship `.cozycode/extensions.json`
+// listing other CozyCode extensions (name/description/repo/download) so opening that
+// folder surfaces them in the Extensions view. Returns the parsed `extensions` array.
+#[tauri::command]
+pub async fn ext_marketplace(root: String) -> Result<serde_json::Value, String> {
+    if root.is_empty() {
+        return Ok(serde_json::json!([]));
+    }
+    let p = Path::new(&root).join(".cozycode").join("extensions.json");
+    let Ok(raw) = std::fs::read_to_string(&p) else { return Ok(serde_json::json!([])) };
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    // accept either a bare array or { "extensions": [...] }
+    Ok(if v.is_array() { v } else { v["extensions"].clone() })
 }

@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <!--
+    CozyCode injects `window.cozy` before this document's own scripts run.
+    ONE entry file serves two roles, told apart by cozy.view.isHost:
+      - host  (isHost === true) : runs hidden at startup = your "activation".
+                                  Register commands + event listeners here.
+      - a view (isHost === false): renders the visible panel UI.
+    See wiki/Writing-Extensions.md for the full API.
+  -->
+  <style>
+    body { font: 13px system-ui, sans-serif; color: #ccc; margin: 0; padding: 12px; }
+    button { background: #0e639c; color: #fff; border: 0; border-radius: 3px; padding: 6px 10px; cursor: pointer; }
+    button:hover { background: #1177bb; }
+    code { color: #4ec9b0; word-break: break-all; }
+    #out { margin-top: 10px; white-space: pre-wrap; color: #9cdcfe; }
+  </style>
+</head>
+<body>
+  <script>
+    // ---- host: register the command once, at activation ----
+    if (cozy.view.isHost) {
+      cozy.commands.register('cozy.hello.sayHi', async () => {
+        const root = await cozy.workspace.root();
+        cozy.window.showMessage('Hello from your extension! Workspace: ' + (root || '(none)'));
+      });
+      // react to the user opening a folder
+      cozy.on('workspaceChanged', d => console.log('[hello] workspace ->', d.root));
+    }
+
+    // ---- view: render the panel ----
+    if (!cozy.view.isHost) {
+      document.body.innerHTML = `
+        <h3 style="margin:0 0 8px">Hello Cozy</h3>
+        <p>A starter CozyCode extension.</p>
+        <button id="root">Show workspace root</button>
+        <button id="cmd">Run command</button>
+        <div id="out"></div>`;
+      const out = document.getElementById('out');
+      document.getElementById('root').onclick = async () => {
+        out.innerHTML = 'root: <code>' + ((await cozy.workspace.root()) || '(no folder open)') + '</code>';
+      };
+      document.getElementById('cmd').onclick = () => cozy.commands.execute('cozy.hello.sayHi');
+    }
+  </script>
+</body>
+</html>

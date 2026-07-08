@@ -1,0 +1,17 @@
+{
+  "id": "cozy.hello",
+  "name": "Hello Cozy",
+  "version": "0.1.0",
+  "description": "Starter extension — a right-side panel and a command. Copy this folder to begin.",
+  "publisher": "cozy",
+  "icon": "icon.svg",
+  "main": "index.html",
+  "contributes": {
+    "views": [
+      { "id": "cozy.hello.view", "title": "Hello", "icon": "$(rocket)", "location": "right" }
+    ],
+    "commands": [
+      { "command": "cozy.hello.sayHi", "title": "Say Hi", "category": "Hello" }
+    ]
+  }
+}

@@ -257,7 +257,7 @@ function buildCommands() {
 		{ label: 'Accounts: Sign in with GitHub', icon: 'github', run: githubLogin },
 		{ label: "Shell Command: Install 'cozy' command in PATH", icon: 'terminal', run: async () => { try { toast(await invoke('install_cli'), 6000); } catch (e) { toast('Install CLI failed: ' + e); } } },
 		{ label: 'Explorer: Register "Open with CozyCode" menu', icon: 'menu', run: () => invoke('register_context_menu').then(() => toast('Context menu registered')).catch(e => toast(e)) },
-		{ label: 'Extensions: Import from VS Code', icon: 'extensions', run: async () => { if (!(await confirmDialog('Import VS Code extensions?', 'Copy VS Code extensions into CozyCode?'))) return; try { const n = await invoke('import_vscode_extensions'); toast(n > 0 ? `Imported ${n}` : 'Nothing to import'); if (n > 0) Ext.startExtHost(true); } catch (e) { toast(e); } } },
+		{ label: 'Extensions: Install from File (.cext / .zip)', icon: 'cloud-download', run: () => importExtension() },
 	];
 	if (repo) cmds.push(
 		{ label: 'Git: Checkout branch...', icon: 'git-branch', detail: repo.name, run: () => Git.pickBranch(repo) },
@@ -838,16 +838,6 @@ Object.assign(Settings, {
 			invoke('register_context_menu').then(() => localStorage.setItem('cozyCtxMenu', '1')).catch(() => { });
 		if (!localStorage.getItem('cozyCli'))
 			invoke('install_cli').then(() => localStorage.setItem('cozyCli', '1')).catch(() => { });
-		// one-time: ASK before importing VS Code extensions (never silently)
-		if (!localStorage.getItem('cozyVscodeImport')) {
-			localStorage.setItem('cozyVscodeImport', '1');
-			setTimeout(async () => {
-				if (await confirmDialog('Import VS Code extensions?', 'CozyCode found VS Code extensions on this machine. Copy them into CozyCode? Note: language servers and debuggers may not run yet.')) {
-					try { const n = await invoke('import_vscode_extensions'); toast(n > 0 ? `Imported ${n} extension(s)` : 'Nothing to import', 4000); if (n > 0) Ext.startExtHost(true); }
-					catch (e) { toast('Import failed: ' + e); }
-				}
-			}, 2500);
-		}
 	} catch { }
 
 	// launched via "Open with CozyCode" / double-click a file or folder?

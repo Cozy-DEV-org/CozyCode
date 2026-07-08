@@ -362,7 +362,10 @@ body.dragging-resize iframe { pointer-events: none !important; }
 	border-radius: 2px; cursor: pointer;
 }
 .ext-btn.uninstall { background: #6c2022; }
+.ext-btn.primary { background: var(--accent); }
 .ext-btn:disabled { opacity: .5; cursor: default; }
+.ext-import-row { padding: 8px 10px; border-bottom: 1px solid rgba(60,60,60,.4); }
+.ext-import-row .ext-btn { width: 100%; padding: 6px 8px; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 
 /* ---------- main / tabs ---------- */
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }

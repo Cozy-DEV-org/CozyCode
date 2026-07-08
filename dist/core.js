@@ -19,8 +19,6 @@ const state = {
 	monacoTheme: 'vs-dark',
 	settings: {},
 	problems: {},          // uri -> [ {message, severity, startLine, ...} ]
-	exthostReady: false,
-	rpcId: 1, rpcWaiters: new Map(),
 };
 
 // Safety net: a single unhandled error must never silently freeze the whole UI.

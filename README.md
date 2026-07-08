@@ -30,7 +30,7 @@ CozyCode ships a dedicated **AI panel** on the right. Two modes, one click apart
 - **AI Chat** — talk to any model over the Chat API. `@` to mention files, highlight code and drop it into chat, attach files, paste images. Bring your own key: **Anthropic · OpenAI · OpenRouter · z.ai · Groq · Ollama**.
 - **Claude Code CLI** — run the real [Claude Code](https://www.anthropic.com/claude-code) agent right inside CozyCode (you install the CLI once, CozyCode drives it). Multi-session, restore, kill-per-session.
 
-> The whole extension surface an AI agent needs — quick picks, input boxes, notifications, webview panels — is wired through a real UI bridge, so agent extensions (including Claude's own VS Code integration) actually work.
+> The AI panel is **built in** — no extension to install, no marketplace account, no telemetry. Bring your key and go.
 
 ### AI-native Markdown
 AI writes a lot of Markdown — plans, notes, docs. CozyCode makes it a pleasure to read:
@@ -45,7 +45,7 @@ AI writes a lot of Markdown — plans, notes, docs. CozyCode makes it a pleasure
 - **Editor** — Monaco (the same core as VS Code), preview/pinned tabs, syntax for every language, minimap, zoom (`Ctrl +/−/0`)
 - **Explorer** — file tree with [vscode-icons](https://github.com/vscode-icons/vscode-icons), ripgrep search, Quick Open (`Ctrl+P`), a titlebar command center
 - **Source Control** — multi-repo, REPOSITORIES / CHANGES / GRAPH, diff, stage / discard, commit, merge, push / pull, Pull Requests, and **AI-generated commit messages**
-- **Extensions** — install from [Open VSX](https://open-vsx.org) and run them on a built-in extension host: tree views, **webview views & panels**, `viewsWelcome`, commands, completions, diagnostics, LSP. Containers land in their real spot — **left activity bar, right secondary side bar, or bottom panel** — with monochrome icons that match the theme.
+- **Extensions** — CozyCode's own lightweight, native model: an extension is plain HTML/JS in a sandboxed iframe, packaged as a single **`.cext`** file, talking to the editor through a small `cozy` API. Views land **left / right / bottom**, commands in the palette, with monochrome icons that match the theme. No VS Code, no Node, no build step. Write one in minutes — see [Writing Extensions](docs/Writing-Extensions.md).
 - **Layout** — resizable sidebars & panel that track the cursor exactly, titlebar toggles for Left / Panel / Right (`Ctrl+Alt+B`), custom titlebar + menus
 - **Terminal** — auto-detected shells (pwsh, cmd, Git Bash, WSL, zsh/bash), split, drag-reorder, per-terminal kill
 - **Remote** — built-in SSH (SFTP edit, port forwarding) and public tunnels (cloudflared / ngrok / tailscale)
@@ -80,8 +80,9 @@ On macOS/Linux set `bundle.targets` in `tauri.conf.json` to `"all"`; the committ
 
 ## Layout
 
-- `src-tauri/` — Rust backend + Tauri config (fs, git, pty, ssh, extension host, AI, tunnels, Markdown graph)
+- `src-tauri/` — Rust backend + Tauri config (fs, git, pty, ssh, extensions, AI, tunnels, Markdown graph)
 - `dist/` — frontend (Monaco workbench UI, no build step)
+- `examples/` — starter extension (`hello-cozy`) for the native `.cext` model
 
 ## License
 
