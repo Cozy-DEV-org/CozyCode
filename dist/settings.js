@@ -193,8 +193,9 @@ function openKeybindings() {
 
 /* ================= palette ================= */
 let paletteItems = [], paletteSel = 0;
-function showPalette(items, placeholder, initial = '') {
-	paletteItems = items; paletteSel = 0;
+let _pOpts = null; // optional { onFocus(item), onCancel() } for the current palette
+function showPalette(items, placeholder, initial = '', opts = null) {
+	paletteItems = items; paletteSel = 0; _pOpts = opts;
 	const p = $('#palette'), input = $('#palette-input');
 	p.classList.remove('hidden');
 	input.placeholder = placeholder || '';
@@ -202,7 +203,11 @@ function showPalette(items, placeholder, initial = '') {
 	input.focus();
 	renderPalette();
 }
-function hidePalette() { $('#palette').classList.add('hidden'); }
+function hidePalette(cancelled) {
+	$('#palette').classList.add('hidden');
+	if (cancelled && _pOpts && _pOpts.onCancel) _pOpts.onCancel();
+	_pOpts = null;
+}
 function renderPalette() {
 	const q = $('#palette-input').value.toLowerCase().replace(/^>/, '').trim();
 	const list = $('#palette-list');
@@ -220,6 +225,7 @@ function renderPalette() {
 		d.onclick = () => { hidePalette(); item.run(); };
 		list.appendChild(d);
 	});
+	if (_pOpts && _pOpts.onFocus && filtered[paletteSel]) _pOpts.onFocus(filtered[paletteSel]);
 }
 $('#palette-input').addEventListener('input', e => {
 	if (e.target.value.startsWith('>') && $('#palette')._mode === 'files') { $('#palette')._mode = 'commands'; paletteItems = buildCommands(); }
@@ -227,12 +233,12 @@ $('#palette-input').addEventListener('input', e => {
 });
 $('#palette-input').addEventListener('keydown', e => {
 	const filtered = $('#palette-list')._filtered || [];
-	if (e.key === 'Escape') hidePalette();
+	if (e.key === 'Escape') hidePalette(true);
 	else if (e.key === 'ArrowDown') { paletteSel = Math.min(paletteSel + 1, filtered.length - 1); renderPalette(); e.preventDefault(); }
 	else if (e.key === 'ArrowUp') { paletteSel = Math.max(paletteSel - 1, 0); renderPalette(); e.preventDefault(); }
 	else if (e.key === 'Enter' && filtered[paletteSel]) { hidePalette(); filtered[paletteSel].run(); }
 });
-document.addEventListener('mousedown', e => { if (!$('#palette').classList.contains('hidden') && !$('#palette').contains(e.target)) hidePalette(); });
+document.addEventListener('mousedown', e => { if (!$('#palette').classList.contains('hidden') && !$('#palette').contains(e.target)) hidePalette(true); });
 
 function buildCommands() {
 	const repo = $('#st-branch')._repo || state.repos[0];
@@ -281,12 +287,31 @@ function commandPalette() {
 }
 
 async function pickTheme() {
+	// remember the current theme so cancelling the picker reverts cleanly (preview
+	// never writes localStorage, so it stays intact and restoreTheme() re-applies it)
+	const original = localStorage.getItem('cozyTheme');
+	const revert = () => { if (original) restoreTheme(); else applyBuiltinTheme('Dark+'); };
+
 	const items = [
-		{ label: 'Dark+ (default dark)', icon: 'color-mode', run: () => applyBuiltinTheme('Dark+') },
-		{ label: 'Light+ (default light)', icon: 'color-mode', run: () => applyBuiltinTheme('Light+') },
+		{ label: 'Dark+ (default dark)', icon: 'color-mode', detail: 'built-in', focus: () => applyBuiltinTheme('Dark+', true), run: () => applyBuiltinTheme('Dark+') },
+		{ label: 'Light+ (default light)', icon: 'color-mode', detail: 'built-in', focus: () => applyBuiltinTheme('Light+', true), run: () => applyBuiltinTheme('Light+') },
 	];
-	try { for (const ext of await invoke('ext_list')) for (const th of ext.themes) items.push({ label: th.label, detail: ext.id, icon: 'symbol-color', run: () => applyExtTheme(th.path, th.ui_theme, th.label) }); } catch { }
-	showPalette(items, 'Select Color Theme');
+	// bundled rainglow themes
+	try {
+		const idx = await (await fetch('themes/index.json')).json();
+		for (const t of idx) items.push({
+			label: t.label, detail: t.type, icon: t.type === 'light' ? 'color-mode' : 'symbol-color',
+			focus: () => applyBundledTheme(t.file, t.label, t.type, { preview: true, silent: true }),
+			run: () => applyBundledTheme(t.file, t.label, t.type),
+		});
+	} catch { }
+	// extension-contributed themes
+	try { for (const ext of await invoke('ext_list')) for (const th of ext.themes || []) items.push({ label: th.label, detail: ext.id, icon: 'symbol-color', focus: () => applyExtTheme(th.path, th.ui_theme, th.label, true), run: () => applyExtTheme(th.path, th.ui_theme, th.label) }); } catch { }
+
+	showPalette(items, 'Color Theme — arrow to preview, Enter to keep, Esc to cancel', '', {
+		onFocus: (item) => { if (item && item.focus) item.focus(); },
+		onCancel: revert,
+	});
 }
 
 /* ============ suggest a formatter/linter when the language has none ============ */

@@ -332,11 +332,21 @@ const DEFAULT_VARS = {
 	'--border': '#3c3c3c', '--titlebar-fg': '#cccccc', '--active': '#37373d',
 };
 
-async function applyExtTheme(themePath, uiTheme, label) {
+const LIGHT_VARS = {
+	'--bg': '#ffffff', '--sidebar': '#f3f3f3', '--activity': '#2c2c2c', '--tabbar': '#f3f3f3',
+	'--tab-active': '#ffffff', '--input': '#ffffff', '--hover': '#e8e8e8', '--fg': '#333333',
+	'--border': '#e5e5e5', '--titlebar': '#dddddd', '--titlebar-fg': '#333333',
+	'--list-sel': '#0060c0', '--active': '#e4e6f1',
+};
+function resetWorkbenchVars(type) {
+	const base = type === 'light' ? { ...DEFAULT_VARS, ...LIGHT_VARS } : DEFAULT_VARS;
+	for (const [k, v] of Object.entries(base)) document.documentElement.style.setProperty(k, v);
+}
+
+// Apply a parsed VS Code theme JSON to Monaco + the workbench CSS vars. `save` is the
+// localStorage descriptor (null = transient preview); `silent` suppresses the toast.
+async function applyThemeJson(json, uiTheme, label, save, silent) {
 	await monacoReady;
-	let json;
-	try { json = JSON.parse(stripJsonComments(await invoke('read_file', { path: themePath }))); }
-	catch (e) { toast('Theme load failed: ' + e); return; }
 	const base = uiTheme === 'vs' ? 'vs' : uiTheme === 'hc-black' ? 'hc-black' : 'vs-dark';
 	const rules = [];
 	for (const tc of json.tokenColors || []) {
@@ -357,27 +367,45 @@ async function applyExtTheme(themePath, uiTheme, label) {
 		monaco.editor.setTheme('cozy-ext');
 		state.monacoTheme = 'cozy-ext';
 	} catch (e) { toast('Theme define failed: ' + e); return; }
+	// start from type-appropriate defaults so a theme that omits a var doesn't inherit
+	// the previous theme's value, then layer the theme's own workbench colors on top
+	resetWorkbenchVars(base === 'vs' ? 'light' : 'dark');
 	for (const [k, cssVar] of Object.entries(CSS_VAR_MAP))
 		if (colors[k]) document.documentElement.style.setProperty(cssVar, colors[k]);
-	localStorage.setItem('cozyTheme', JSON.stringify({ path: themePath, uiTheme, label }));
-	toast('Theme: ' + label);
+	if (save) localStorage.setItem('cozyTheme', JSON.stringify(save));
+	if (!silent) toast('Theme: ' + label);
 }
 
-function applyBuiltinTheme(name) {
+async function applyExtTheme(themePath, uiTheme, label, preview) {
+	let json;
+	try { json = JSON.parse(stripJsonComments(await invoke('read_file', { path: themePath }))); }
+	catch (e) { if (!preview) toast('Theme load failed: ' + e); return; }
+	await applyThemeJson(json, uiTheme, label, preview ? null : { path: themePath, uiTheme, label }, preview);
+}
+
+// Bundled themes (dist/themes/<file>, the rainglow collection). opts.preview = don't
+// persist; opts.silent = no toast.
+const _bundledThemeCache = {};
+async function loadBundledTheme(file) {
+	if (_bundledThemeCache[file]) return _bundledThemeCache[file];
+	const json = await (await fetch('themes/' + file)).json();
+	_bundledThemeCache[file] = json;
+	return json;
+}
+async function applyBundledTheme(file, label, type, opts) {
+	opts = opts || {};
+	try {
+		const json = await loadBundledTheme(file);
+		await applyThemeJson(json, type === 'light' ? 'vs' : 'vs-dark', label, opts.preview ? null : { bundled: file, label, type }, opts.silent);
+	} catch (e) { if (!opts.silent) toast('Theme load failed: ' + e); }
+}
+
+function applyBuiltinTheme(name, preview) {
 	const monacoName = name === 'Light+' ? 'vs' : 'vs-dark';
 	state.monacoTheme = monacoName;
 	if (state.editor) monaco.editor.setTheme(monacoName);
-	for (const [k, v] of Object.entries(DEFAULT_VARS)) document.documentElement.style.setProperty(k, v);
-	if (name === 'Light+') {
-		const light = {
-			'--bg': '#ffffff', '--sidebar': '#f3f3f3', '--activity': '#2c2c2c', '--tabbar': '#f3f3f3',
-			'--tab-active': '#ffffff', '--input': '#ffffff', '--hover': '#e8e8e8', '--fg': '#333333',
-			'--border': '#e5e5e5', '--titlebar': '#dddddd', '--titlebar-fg': '#333333',
-			'--list-sel': '#0060c0', '--active': '#e4e6f1',
-		};
-		for (const [k, v] of Object.entries(light)) document.documentElement.style.setProperty(k, v);
-	}
-	localStorage.setItem('cozyTheme', JSON.stringify({ builtin: name }));
+	resetWorkbenchVars(name === 'Light+' ? 'light' : 'dark');
+	if (!preview) localStorage.setItem('cozyTheme', JSON.stringify({ builtin: name }));
 }
 
 async function restoreTheme() {
@@ -386,6 +414,7 @@ async function restoreTheme() {
 	try {
 		const t = JSON.parse(saved);
 		if (t.builtin) applyBuiltinTheme(t.builtin);
+		else if (t.bundled) await applyBundledTheme(t.bundled, t.label, t.type, { silent: true });
 		else if (t.path) await applyExtTheme(t.path, t.uiTheme, t.label);
 	} catch { /* ignore */ }
 }
