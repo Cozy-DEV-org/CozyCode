@@ -170,7 +170,16 @@ const joinPath = (a, b) => state.remote ? (a.replace(/\/+$/, '') + '/' + b) : (a
 
 function toast(msg, ms = 3500) {
 	const t = $('#toast');
-	t.textContent = String(msg).slice(0, 800);
+	t.innerHTML = '';
+	const span = document.createElement('span');
+	span.className = 'toast-text';
+	span.textContent = String(msg).slice(0, 800);
+	const close = document.createElement('button');
+	close.className = 'toast-close';
+	close.title = 'Close';
+	close.innerHTML = '<span class="codicon codicon-close"></span>';
+	close.onclick = () => { t.classList.add('hidden'); clearTimeout(t._h); };
+	t.appendChild(span); t.appendChild(close);
 	t.classList.remove('hidden');
 	clearTimeout(t._h);
 	t._h = setTimeout(() => t.classList.add('hidden'), ms);
@@ -204,7 +213,7 @@ const ICON_BY_EXT = {
 	yml: 'yaml', yaml: 'yaml', xml: 'xml', svg: 'svg', sh: 'shell', bash: 'shell', zsh: 'shell',
 	bat: 'bat', cmd: 'bat', ps1: 'powershell', psm1: 'powershell', sql: 'sql', go: 'go',
 	java: 'java', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp', cs: 'csharp', php: 'php',
-	rb: 'ruby', vue: 'vue', dart: 'dartlang', kt: 'kotlin', swift: 'swift', lua: 'lua', r: 'r',
+	rb: 'ruby', vue: 'vue', dart: 'dartlang', kt: 'kotlin', swift: 'swift', lua: 'lua', luau: 'lua', r: 'r',
 	ini: 'ini', cfg: 'config', conf: 'config', txt: 'text', pdf: 'pdf', log: 'log',
 	png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', ico: 'image', webp: 'image', bmp: 'image',
 	zip: 'zip', gz: 'zip', tar: 'zip', '7z': 'zip', exe: 'binary', dll: 'binary',
@@ -232,7 +241,7 @@ const LANG = {
 	toml: 'ini', ini: 'ini', cfg: 'ini', conf: 'ini', yml: 'yaml', yaml: 'yaml', xml: 'xml',
 	svg: 'xml', sh: 'shell', bash: 'shell', bat: 'bat', cmd: 'bat', ps1: 'powershell',
 	sql: 'sql', go: 'go', java: 'java', c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', hpp: 'cpp',
-	cs: 'csharp', php: 'php', rb: 'ruby', lua: 'lua', r: 'r', swift: 'swift', kt: 'kotlin',
+	cs: 'csharp', php: 'php', rb: 'ruby', lua: 'lua', luau: 'lua', r: 'r', swift: 'swift', kt: 'kotlin',
 	dart: 'dart', vue: 'html', diff: 'diff', patch: 'diff', txt: 'plaintext', log: 'plaintext',
 	dockerfile: 'dockerfile', graphql: 'graphql',
 };
@@ -814,6 +823,7 @@ function renderTabs() {
 		else d.appendChild(fileIconImg(t.name));
 		const label = document.createElement('span');
 		label.textContent = t.name;
+		if (t.deleted) { label.style.textDecoration = 'line-through'; label.title = 'File was deleted — unsaved cache'; }
 		d.appendChild(label);
 		const close = document.createElement('button');
 		close.className = 'close';
@@ -841,9 +851,34 @@ const ENCODING_LABELS = {
 	utf8: 'UTF-8', utf8bom: 'UTF-8 with BOM', utf16le: 'UTF-16 LE', utf16be: 'UTF-16 BE', latin1: 'Latin-1',
 };
 
+// keep open tabs in sync when files are deleted/renamed from the explorer
+function markTabsDeleted(path, isDir) {
+	for (const t of state.tabs) {
+		if (t.kind !== 'file' || !t.path) continue;
+		if (t.path === path || (isDir && t.path.startsWith(path + '\\'))) t.deleted = true;
+	}
+	renderTabs();
+}
+function updateOpenTabsRenamed(from, to, isDir) {
+	for (const t of state.tabs) {
+		if (t.kind !== 'file' || !t.path) continue;
+		let np = null;
+		if (t.path === from) np = to;
+		else if (isDir && t.path.startsWith(from + '\\')) np = to + t.path.slice(from.length);
+		if (!np) continue;
+		const wasActive = state.active === t.key;
+		t.path = np; t.key = np; t.name = basename(np); t.deleted = false;
+		if (t.model) try { monaco.editor.setModelLanguage(t.model, langOf(np)); } catch { } // .ext change
+		if (wasActive) state.active = np;
+		if (state.previewTab === from) state.previewTab = np;
+	}
+	renderTabs();
+}
+
 async function saveActive() {
 	const tab = findTab(state.active);
 	if (!tab || tab.kind !== 'file' || tab.readOnly || !tab.path) return;
+	if (tab.deleted) { toast('File was deleted — can\'t save (unsaved cache remains in the tab)'); return; }
 	if (tab.encoding && tab.encoding !== 'utf8' && !state.remote) {
 		await invoke('write_file_encoded', { path: tab.path, content: tab.model.getValue(), encoding: tab.encoding });
 	} else {

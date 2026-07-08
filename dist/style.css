@@ -577,9 +577,14 @@ body.dragging-resize iframe { pointer-events: none !important; }
 /* ---------- toast ---------- */
 #toast {
 	position: fixed; bottom: 34px; right: 16px; background: var(--sidebar); border: 1px solid var(--border);
-	padding: 10px 14px; z-index: 3000; max-width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,.6);
-	white-space: pre-wrap; font-size: 12px;
+	padding: 8px 8px 8px 14px; z-index: 3000; max-width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,.6);
+	font-size: 12px; display: flex; align-items: flex-start; gap: 8px;
 }
+#toast .toast-text { white-space: pre-wrap; flex: 1; min-width: 0; padding-top: 2px; }
+.toast-close { background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 2px; flex-shrink: 0; border-radius: 3px; }
+.toast-close:hover { background: var(--hover); color: var(--fg); }
+.rename-input { font: inherit; color: var(--fg); background: var(--input); border: 1px solid var(--status); border-radius: 2px; padding: 0 2px; outline: none; min-width: 60px; }
+.scm-init-btn { display: inline-flex; align-items: center; gap: 6px; margin: 6px 12px; padding: 5px 12px; }
 
 /* ---------- aux panel (Claude AI) ---------- */
 #aux-resizer { width: 4px; cursor: ew-resize; background: transparent; flex-shrink: 0; }

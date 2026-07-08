@@ -144,6 +144,12 @@ fn run_git(repo: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
+// `git init` in a folder that isn't yet a repository (SCM "Initialize Repository").
+#[tauri::command]
+pub async fn git_init(root: String) -> Result<(), String> {
+    Repository::init(&root).map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn find_repos(root: String) -> Vec<String> {
     fn scan(dir: &Path, depth: u32, out: &mut Vec<String>) {

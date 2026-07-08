@@ -238,6 +238,13 @@ pub async fn ext_path_exists(path: String) -> bool {
     Path::new(&path).exists()
 }
 
+// Absolute path of an installed extension's own folder (so an extension can locate its
+// bundled files, e.g. a Node sync server to spawn).
+#[tauri::command]
+pub async fn ext_dir(id: String) -> Result<String, String> {
+    Ok(ext_root()?.join(sanitize(&id)).to_string_lossy().into_owned())
+}
+
 // Download a URL to a local file. The frontend confirms before calling (downloads are
 // an explicit-permission action).
 #[tauri::command]

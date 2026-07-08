@@ -102,14 +102,14 @@ async function renderDir(dir, container, depth) {
 				openFile(e.path, { preview: true });
 			};
 			item.ondblclick = () => pinFile(e.path);
-			item.oncontextmenu = ev => { ev.preventDefault(); fileContextMenu(e, ev.clientX, ev.clientY); };
+			item.oncontextmenu = ev => { ev.preventDefault(); fileContextMenu(e, item, ev.clientX, ev.clientY); };
 		}
-		if (e.is_dir) item.oncontextmenu = ev => { ev.preventDefault(); dirContextMenu(e, item.nextElementSibling, depth, ev.clientX, ev.clientY); };
+		if (e.is_dir) item.oncontextmenu = ev => { ev.preventDefault(); dirContextMenu(e, item, item.nextElementSibling, depth, ev.clientX, ev.clientY); };
 	}
 }
 
 /* ---- context menus ---- */
-function fileContextMenu(e, x, y) {
+function fileContextMenu(e, item, x, y) {
 	const repo = Git.repoOf ? Git.repoOf(e.path) : null;
 	const isMd = /\.md$/i.test(e.name);
 	contextMenu(x, y, [
@@ -126,18 +126,18 @@ function fileContextMenu(e, x, y) {
 		{ label: 'Copy Path', key: 'Shift+Alt+C', run: () => navigator.clipboard.writeText(e.path) },
 		{ label: 'Copy Relative Path', run: () => navigator.clipboard.writeText(state.root ? e.path.replace(state.root, '').replace(/^[\\/]/, '') : e.path) },
 		'-',
-		{ label: 'Rename...', key: 'F2', run: () => renameEntry(e) },
+		{ label: 'Rename', key: 'F2', run: () => startInlineRename(item, e) },
 		{ label: 'Delete', key: 'Del', run: () => deleteEntry(e) },
 	]);
 }
-function dirContextMenu(e, childBox, depth, x, y) {
+function dirContextMenu(e, item, childBox, depth, x, y) {
 	contextMenu(x, y, [
 		{ label: 'New File...', run: () => { expandDir(e, childBox, depth); inlineCreate(childBox, depth + 1, false, e.path); } },
 		{ label: 'New Folder...', run: () => { expandDir(e, childBox, depth); inlineCreate(childBox, depth + 1, true, e.path); } },
 		'-',
 		{ label: 'Copy Path', run: () => navigator.clipboard.writeText(e.path) },
 		'-',
-		{ label: 'Rename...', key: 'F2', run: () => renameEntry(e) },
+		{ label: 'Rename', key: 'F2', run: () => startInlineRename(item, e) },
 		{ label: 'Delete', key: 'Del', run: () => deleteEntry(e) },
 	]);
 }
@@ -146,18 +146,42 @@ async function expandDir(e, childBox, depth) {
 	if (!state.expanded.has(e.path)) { state.expanded.add(e.path); await renderDir(e.path, childBox, depth + 1); }
 }
 
+// Delete = straight to Recycle Bin (recoverable), no confirmation popup.
 async function deleteEntry(e) {
-	if (!(await confirmDialog(`Delete '${e.name}'?`, 'This cannot be undone.'))) return;
-	try { state.remote ? await invoke('ssh_exec', { id: state.remote.id, cmd: `rm -rf ${JSON.stringify(e.path)}` }) : await invoke('delete_path', { path: e.path }); }
-	catch (err) { toast(err); return; }
+	try {
+		if (state.remote) await invoke('ssh_exec', { id: state.remote.id, cmd: `rm -rf ${JSON.stringify(e.path)}` });
+		else await invoke('recycle_path', { path: e.path });
+	} catch (err) { toast('Delete failed: ' + err); return; }
+	markTabsDeleted(e.path, e.is_dir); // open tabs -> cached, strikethrough, can't save
 	state.fileList = null; renderTree();
+	if (!state.remote) toast('Moved to Recycle Bin: ' + e.name, 2500);
 }
-async function renameEntry(e) {
-	const val = await nativePrompt('Rename', e.name);
-	if (!val || val === e.name) return;
-	const dir = e.path.slice(0, e.path.length - e.name.length);
-	try { await invoke('rename_path', { from: e.path, to: dir + val }); } catch (err) { toast(err); return; }
-	state.fileList = null; renderTree();
+// Rename = edit the name inline in the tree (no popup). basename is pre-selected.
+function startInlineRename(item, e) {
+	const label = item.lastElementChild;
+	if (!label || item.querySelector('.rename-input')) return;
+	const input = document.createElement('input');
+	input.className = 'rename-input';
+	input.value = e.name;
+	input.spellcheck = false;
+	label.replaceWith(input);
+	input.focus();
+	const dot = e.is_dir ? -1 : e.name.lastIndexOf('.');
+	input.setSelectionRange(0, dot > 0 ? dot : e.name.length);
+	let done = false;
+	const finish = async commit => {
+		if (done) return; done = true;
+		const val = input.value.trim();
+		input.replaceWith(label);
+		if (!commit || !val || val === e.name) return;
+		const dir = e.path.slice(0, e.path.length - e.name.length);
+		const to = dir + val;
+		try { await invoke('rename_path', { from: e.path, to }); } catch (err) { toast('Rename failed: ' + err); return; }
+		updateOpenTabsRenamed(e.path, to, e.is_dir); // open tabs follow the new name/ext
+		state.fileList = null; renderTree();
+	};
+	input.onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); finish(true); } else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); } };
+	input.onblur = () => finish(true);
 }
 
 // inline create: add a tree row with an <input> to type the name directly

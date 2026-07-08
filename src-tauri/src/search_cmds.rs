@@ -1,5 +1,8 @@
+// Workspace search / quick-open / replace. Native (the `regex` crate + a std walk) so
+// it works with nothing installed — no external ripgrep. Heavy dirs are skipped and
+// counts are capped to stay fast on large trees.
 use serde::Serialize;
-use std::process::Command;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 pub struct SearchMatch {
@@ -8,113 +11,121 @@ pub struct SearchMatch {
     pub text: String,
 }
 
-// for Ctrl+P quick open — respects .gitignore like VSCode
+const SKIP_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "out", "vendor", ".cache", ".next", ".venv"];
+const MAX_FILES: usize = 20000;
+
+fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > 12 || out.len() >= MAX_FILES {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        if out.len() >= MAX_FILES {
+            return;
+        }
+        let p = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if p.is_dir() {
+            if name.starts_with('.') || SKIP_DIRS.contains(&name.as_str()) {
+                continue; // skip .git / dotdirs / heavy build dirs
+            }
+            walk(&p, depth + 1, out);
+        } else {
+            out.push(p);
+        }
+    }
+}
+
+// no NUL byte in the head => treat as text (skip binaries)
+fn is_text(bytes: &[u8]) -> bool {
+    !bytes.iter().take(8192).any(|&b| b == 0)
+}
+
+// literal (escaped) or regex, with smart-case: case-insensitive unless the query has
+// an uppercase letter or the caller forced case-sensitivity.
+fn matcher(query: &str, is_regex: bool, case: Option<bool>) -> Result<regex::Regex, String> {
+    let sensitive = matches!(case, Some(true)) || query.chars().any(|c| c.is_uppercase());
+    let pat = if is_regex { query.to_string() } else { regex::escape(query) };
+    regex::RegexBuilder::new(&pat)
+        .case_insensitive(!sensitive)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+// Ctrl+P quick open — paths relative to the workspace root.
 #[tauri::command]
 pub async fn list_files(root: String) -> Result<Vec<String>, String> {
-    let output = crate::util::command("rg")
-        .args(["--files"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("ripgrep not found: {e}"))?;
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .take(20000)
-        .map(String::from)
+    let mut files = Vec::new();
+    walk(Path::new(&root), 0, &mut files);
+    let base = Path::new(&root);
+    Ok(files
+        .iter()
+        .filter_map(|p| p.strip_prefix(base).ok().map(|r| r.to_string_lossy().into_owned()))
         .collect())
 }
 
-// ponytail: shells out to ripgrep like VSCode itself does; bundle rg.exe with the
-// installer when packaging (Phase 5) so users don't need it on PATH.
 #[tauri::command]
 pub async fn search_text(root: String, query: String, regex: Option<bool>, case: Option<bool>) -> Result<Vec<SearchMatch>, String> {
     if query.is_empty() {
         return Ok(vec![]);
     }
-    let mut args: Vec<String> = vec!["--json".into(), "--max-count".into(), "200".into()];
-    if regex != Some(true) {
-        args.push("--fixed-strings".into());
-    }
-    if case == Some(true) {
-        args.push("--case-sensitive".into());
-    } else {
-        args.push("--smart-case".into());
-    }
-    args.push(query.clone());
-    args.push(root.clone());
-    let output = crate::util::command("rg")
-        .args(&args)
-        .output()
-        .map_err(|e| format!("ripgrep not found: {e}"))?;
-
+    let re = matcher(&query, regex == Some(true), case)?;
+    let mut files = Vec::new();
+    walk(Path::new(&root), 0, &mut files);
     let mut matches = Vec::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if v["type"] != "match" {
-            continue;
-        }
-        let d = &v["data"];
-        matches.push(SearchMatch {
-            path: d["path"]["text"].as_str().unwrap_or("").to_string(),
-            line: d["line_number"].as_u64().unwrap_or(0),
-            text: d["lines"]["text"]
-                .as_str()
-                .unwrap_or("")
-                .trim_end()
-                .chars()
-                .take(300)
-                .collect(),
-        });
+    for f in files {
         if matches.len() >= 1000 {
             break;
+        }
+        let Ok(bytes) = std::fs::read(&f) else { continue };
+        if !is_text(&bytes) {
+            continue;
+        }
+        let Ok(content) = String::from_utf8(bytes) else { continue };
+        let path = f.to_string_lossy().into_owned();
+        let mut per_file = 0;
+        for (i, line) in content.lines().enumerate() {
+            if re.is_match(line) {
+                matches.push(SearchMatch {
+                    path: path.clone(),
+                    line: (i + 1) as u64,
+                    text: line.trim_end().chars().take(300).collect(),
+                });
+                per_file += 1;
+                if per_file >= 200 || matches.len() >= 1000 {
+                    break;
+                }
+            }
         }
     }
     Ok(matches)
 }
 
-// Replace All across the workspace. Uses rg to find files with matches, then
-// applies the replacement per file (literal or regex). Returns files changed.
+// Replace All across the workspace. Returns the number of files changed.
 #[tauri::command]
 pub async fn search_replace(root: String, find: String, replace: String, regex: Option<bool>, case: Option<bool>) -> Result<u32, String> {
     if find.is_empty() {
         return Err("nothing to find".into());
     }
-    let mut args: Vec<String> = vec!["--files-with-matches".into()];
-    if regex != Some(true) {
-        args.push("--fixed-strings".into());
-    }
-    if case == Some(true) { args.push("--case-sensitive".into()); } else { args.push("--smart-case".into()); }
-    args.push(find.clone());
-    args.push(root.clone());
-    let out = crate::util::command("rg").args(&args).output().map_err(|e| e.to_string())?;
-    let files: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect();
-
-    let re = if regex == Some(true) {
-        Some(regex_lite(&find, case == Some(true))?)
-    } else {
-        None
-    };
+    let is_regex = regex == Some(true);
+    let re = matcher(&find, is_regex, case)?;
+    let mut files = Vec::new();
+    walk(Path::new(&root), 0, &mut files);
     let mut changed = 0u32;
     for f in files {
         let Ok(content) = std::fs::read_to_string(&f) else { continue };
-        let new = match &re {
-            Some(r) => r.replace_all(&content, replace.as_str()).into_owned(),
-            None => content.replace(&find, &replace),
+        if !re.is_match(&content) {
+            continue;
+        }
+        // regex mode: allow $1 group refs. literal mode: NoExpand so $ stays literal.
+        let new = if is_regex {
+            re.replace_all(&content, replace.as_str()).into_owned()
+        } else {
+            re.replace_all(&content, regex::NoExpand(replace.as_str())).into_owned()
         };
         if new != content && std::fs::write(&f, new).is_ok() {
             changed += 1;
         }
     }
     Ok(changed)
-}
-
-// tiny regex wrapper via the `regex` crate is heavy to add; reuse rg for matching
-// and do literal replace unless regex requested. For regex replace we need a real
-// engine — use the `regex` crate.
-fn regex_lite(pat: &str, case: bool) -> Result<regex::Regex, String> {
-    regex::RegexBuilder::new(pat)
-        .case_insensitive(!case)
-        .build()
-        .map_err(|e| e.to_string())
 }

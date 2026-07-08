@@ -70,7 +70,23 @@ function activeRepo() {
 
 async function refreshScm() {
 	if (!state.repos.length) {
-		$('#scm-repos-list').innerHTML = '<div class="scm-empty">No source control providers registered.</div>';
+		const box = $('#scm-repos-list');
+		box.innerHTML = '';
+		if (state.root && !state.remote) {
+			// no .git here -> offer to initialize a repo in this workspace
+			box.innerHTML = '<div class="scm-empty">This folder is not a Git repository yet.</div>';
+			const btn = document.createElement('button');
+			btn.className = 'primary scm-init-btn';
+			btn.innerHTML = '<span class="codicon codicon-repo-create"></span> Initialize Repository';
+			btn.onclick = async () => {
+				btn.disabled = true;
+				try { await invoke('git_init', { root: state.root }); toast('Initialized Git repository'); await discoverRepos(); refreshScm(); renderTree(); }
+				catch (e) { btn.disabled = false; toast('git init failed: ' + e); }
+			};
+			box.appendChild(btn);
+		} else {
+			box.innerHTML = '<div class="scm-empty">No source control providers registered.</div>';
+		}
 		$('#scm-changes').innerHTML = '';
 		$('#scm-graph').innerHTML = '';
 		$('#repos-count').textContent = '';

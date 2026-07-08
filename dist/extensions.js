@@ -30,7 +30,7 @@ const COZY_SHIM = `(function(){
     commands:{register:function(id,fn){cmds[id]=fn;call('registerCommand',[id]);},execute:function(id){return call('executeCommand',[id,[].slice.call(arguments,1)]);}},
     workspace:{root:function(){return call('workspaceRoot');}, listDir:function(p){return call('listDir',[p]);}},
     fs:{readFile:function(p){return call('readFile',[p]);},writeFile:function(p,t){return call('writeFile',[p,t]);},
-      exists:function(p){return call('exists',[p]);},dataDir:function(){return call('dataDir',[]);},
+      exists:function(p){return call('exists',[p]);},dataDir:function(){return call('dataDir',[]);},extensionPath:function(){return call('extensionPath',[]);},
       download:function(url,dest){return call('download',[url,dest]);},unzip:function(zip,dest){return call('unzip',[zip,dest]);}},
     process:{spawn:function(program,args,cwd){return call('procSpawn',[program,args||[],cwd||'']).then(function(id){procs[id]={onData:[],onExit:[]};
       return {id:id,onData:function(cb){procs[id].onData.push(cb);},onExit:function(cb){procs[id].onExit.push(cb);},write:function(s){return call('procWrite',[id,s]);},kill:function(){return call('procKill',[id]);}};});}},
@@ -188,6 +188,7 @@ async function handleCozy(method, args, info, source) {
 		// filesystem helpers for extensions that fetch their own runtime (LSP servers)
 		case 'exists': return invoke('ext_path_exists', { path: args[0] });
 		case 'dataDir': return invoke('ext_data_dir', { id: info.extId });
+		case 'extensionPath': return invoke('ext_dir', { id: info.extId });
 		case 'download': {
 			bindProcEvents();
 			if (!(await confirmDialog('Allow ' + info.extId + ' to download?', args[0]))) throw new Error('download declined');

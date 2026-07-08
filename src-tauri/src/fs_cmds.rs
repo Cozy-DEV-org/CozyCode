@@ -117,6 +117,30 @@ pub async fn delete_path(path: String) -> Result<(), String> {
     }
 }
 
+// Move a file/dir to the Windows Recycle Bin (recoverable) instead of hard-deleting,
+// via VisualBasic FileSystem. No confirmation dialog (OnlyErrorDialogs).
+#[tauri::command]
+pub async fn recycle_path(path: String) -> Result<(), String> {
+    if !Path::new(&path).exists() {
+        return Err("path not found".into());
+    }
+    let p = path.replace('\'', "''");
+    let script = format!(
+        "Add-Type -AssemblyName Microsoft.VisualBasic; \
+         if (Test-Path -LiteralPath '{p}' -PathType Container) {{ [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('{p}','OnlyErrorDialogs','SendToRecycleBin') }} \
+         else {{ [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('{p}','OnlyErrorDialogs','SendToRecycleBin') }}"
+    );
+    let out = crate::util::command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).chars().take(200).collect())
+    }
+}
+
 // ---------- Markdown graph (Obsidian-style relations) ----------
 // Scans the workspace for .md files and extracts [[wikilinks]] and [text](x.md)
 // links so the frontend can draw a relation graph. Capped walk, skips heavy dirs.
