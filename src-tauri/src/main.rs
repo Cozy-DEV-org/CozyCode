@@ -37,6 +37,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             fs_cmds::list_dir,
             fs_cmds::read_file,
+            fs_cmds::stat_paths,
             fs_cmds::read_file_base64,
             fs_cmds::write_file_encoded,
             fs_cmds::write_file,

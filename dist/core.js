@@ -474,6 +474,7 @@ async function openFile(path, opts = {}) {
 	const model = monaco.editor.createModel(content, langOf(path));
 	tab = { key: path, kind: 'file', path, name: basename(path), model, dirty: false, readOnly: false, viewState: null, preview };
 	model.onDidChangeContent(() => {
+		if (tab._reloading) return; // external reload, not a user edit
 		if (tab.preview) { tab.preview = false; state.previewTab = null; renderTabs(); } // edit pins it
 		if (!tab.dirty && !tab.readOnly) { tab.dirty = true; renderTabs(); }
 		if (tab.path) HotExit.mark(tab);
@@ -874,6 +875,37 @@ function updateOpenTabsRenamed(from, to, isDir) {
 	}
 	renderTabs();
 }
+
+// watch open files for external changes (e.g. a sync writing to disk) and reload the
+// buffer IN PLACE — no re-open, no duplicate tab. Skips files with unsaved edits.
+let _fwBusy = false;
+async function fileWatchTick() {
+	if (_fwBusy || state.remote) return;
+	const tabs = state.tabs.filter(t => t.kind === 'file' && t.path && !t.deleted);
+	if (!tabs.length) return;
+	_fwBusy = true;
+	try {
+		const mtimes = await invoke('stat_paths', { paths: tabs.map(t => t.path) });
+		for (let i = 0; i < tabs.length; i++) {
+			const t = tabs[i], m = mtimes[i];
+			if (t._mtime === undefined) { t._mtime = m; continue; }      // baseline
+			if (m === t._mtime) continue;
+			t._mtime = m;
+			if (m === -1) { t.deleted = true; renderTabs(); continue; }  // deleted on disk
+			if (t.dirty) continue;                                       // keep unsaved edits
+			let content; try { content = await FS.readFile(t.path); } catch { continue; }
+			if (!t.model || content === t.model.getValue()) continue;
+			const active = state.editor && state.editor.getModel() === t.model;
+			const pos = active ? state.editor.getPosition() : null;
+			const scroll = active ? state.editor.getScrollTop() : null;
+			t._reloading = true; t.model.setValue(content); t._reloading = false;
+			t.dirty = false; HotExit.clear(t.path);
+			if (active && pos) { try { state.editor.setPosition(pos); state.editor.setScrollTop(scroll); } catch { } }
+			renderTabs();
+		}
+	} catch { } finally { _fwBusy = false; }
+}
+setInterval(fileWatchTick, 1200);
 
 async function saveActive() {
 	const tab = findTab(state.active);

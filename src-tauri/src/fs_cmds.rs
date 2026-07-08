@@ -37,6 +37,23 @@ pub async fn read_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+// Last-modified (ms since epoch) for each path, -1 if missing. Lets the editor detect
+// files changed on disk externally (e.g. by a sync) and reload open buffers.
+#[tauri::command]
+pub async fn stat_paths(paths: Vec<String>) -> Vec<f64> {
+    paths
+        .iter()
+        .map(|p| {
+            fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as f64)
+                .unwrap_or(-1.0)
+        })
+        .collect()
+}
+
 // base64 for binary viewers (image/video/pdf/xlsx). std-only base64 encoder.
 #[tauri::command]
 pub async fn read_file_base64(path: String) -> Result<String, String> {

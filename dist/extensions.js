@@ -367,6 +367,27 @@ function renderLeftViews() {
 	}
 }
 
+// Persistent per-view host: the iframe is created ONCE and NEVER removed from the DOM,
+// so hiding the sidebar (or switching views) only CSS-toggles it — it doesn't reload,
+// so the view's process/state survives (VS Code retained-webview semantics). This is why
+// toggling the side bar no longer kills an extension's server.
+function viewHost(container, view) {
+	let host = container.querySelector(`[data-viewhost="${CSS.escape(view.id)}"]`);
+	if (!host) {
+		host = document.createElement('div');
+		host.dataset.viewhost = view.id;
+		host.className = 'view-host';
+		host.innerHTML = `<div class="view-title"><span>${esc(view.title.toUpperCase())}</span></div>`;
+		const body = document.createElement('div');
+		body.className = 'ext-webview-host';
+		host.appendChild(body);
+		container.appendChild(host);
+		mountView(view, body); // creates the iframe exactly once
+	}
+	container.querySelectorAll('[data-viewhost]').forEach(h => h.style.display = h === host ? 'flex' : 'none');
+	return host;
+}
+
 function showLeftView(id) {
 	const v = extViews.find(x => x.id === id && x.location === 'left');
 	if (!v) return;
@@ -374,13 +395,8 @@ function showLeftView(id) {
 	$(`[data-extview="${CSS.escape(id)}"]`)?.classList.add('active');
 	$$('#sidebar .view').forEach(el => el.classList.add('hidden'));
 	$('#sidebar').style.display = 'flex'; $('#sidebar-resizer').style.display = 'block';
-	const host = $('#ext-views');
-	host.classList.remove('hidden');
-	host.innerHTML = `<div class="view-title"><span>${esc(v.title.toUpperCase())}</span></div>`;
-	const body = document.createElement('div');
-	body.className = 'ext-webview-host';
-	host.appendChild(body);
-	mountView(v, body);
+	$('#ext-views').classList.remove('hidden');
+	viewHost($('#ext-views'), v);
 }
 
 function renderRightViews() {
@@ -406,12 +422,7 @@ function showRightView(id) {
 	$('#secondary-sidebar').classList.remove('hidden');
 	$('#secondary-resizer').classList.remove('hidden');
 	$$('#secondary-activitybar .act-btn').forEach(b => b.classList.toggle('active', b.dataset.secview === id));
-	const host = $('#secondary-views');
-	host.innerHTML = `<div class="view-title"><span>${esc(v.title.toUpperCase())}</span></div>`;
-	const body = document.createElement('div');
-	body.className = 'ext-webview-host';
-	host.appendChild(body);
-	mountView(v, body);
+	viewHost($('#secondary-views'), v);
 }
 
 function hideSecondary() {
