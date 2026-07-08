@@ -35,7 +35,7 @@ const COZY_SHIM = `(function(){
     process:{spawn:function(program,args,cwd){return call('procSpawn',[program,args||[],cwd||'']).then(function(id){procs[id]={onData:[],onExit:[]};
       return {id:id,onData:function(cb){procs[id].onData.push(cb);},onExit:function(cb){procs[id].onExit.push(cb);},write:function(s){return call('procWrite',[id,s]);},kill:function(){return call('procKill',[id]);}};});}},
     languages:{
-      registerCompletionProvider:function(langId,fn){langP['completion:'+langId]=fn;return call('registerLang',['completion',langId]);},
+      registerCompletionProvider:function(langId,fn,resolveFn){langP['completion:'+langId]=fn;if(resolveFn)langP['resolveCompletion:'+langId]=resolveFn;return call('registerLang',['completion',langId]);},
       registerHoverProvider:function(langId,fn){langP['hover:'+langId]=fn;return call('registerLang',['hover',langId]);}
     },
     window:{
@@ -269,7 +269,7 @@ function activeUri(langId) {
 }
 
 const LSP_KIND = { 1: 'Text', 2: 'Method', 3: 'Function', 4: 'Constructor', 5: 'Field', 6: 'Variable', 7: 'Class', 8: 'Interface', 9: 'Module', 10: 'Property', 11: 'Unit', 12: 'Value', 13: 'Enum', 14: 'Keyword', 15: 'Snippet', 16: 'Color', 17: 'File', 18: 'Reference', 19: 'Folder', 20: 'EnumMember', 21: 'Constant', 22: 'Struct', 23: 'Event', 24: 'Operator', 25: 'TypeParameter' };
-function mapLspCompletion(it, range) {
+function mapLspCompletion(it, range, extId, langId) {
 	const kind = monaco.languages.CompletionItemKind[LSP_KIND[it.kind]] ?? monaco.languages.CompletionItemKind.Text;
 	let insertText = it.insertText != null ? it.insertText : (typeof it.label === 'string' ? it.label : it.label && it.label.label);
 	let r = range;
@@ -284,9 +284,24 @@ function mapLspCompletion(it, range) {
 		label: typeof it.label === 'string' ? it.label : (it.label && it.label.label) || '',
 		kind, insertText, range: r,
 		insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
-		detail: it.detail, documentation: docv ? { value: docv } : undefined,
+		detail: it.detail || (it.labelDetails && it.labelDetails.detail) || undefined,
+		documentation: docv ? { value: docv } : undefined,
 		sortText: it.sortText, filterText: it.filterText,
+		// keep the raw LSP item so resolveCompletionItem can fetch detail/docs on demand
+		_lsp: it, _extId: extId, _lang: langId,
 	};
+}
+
+// lazily fetch detail + documentation for the focused item (completionItem/resolve)
+async function resolveCompletion(item) {
+	if (!item || !item._lsp || !item._extId) return item;
+	const res = await langRequest(item._extId, 'resolveCompletion', item._lang, item._lsp, 3000);
+	if (res) {
+		if (res.detail) item.detail = res.detail;
+		const d = res.documentation && (typeof res.documentation === 'string' ? res.documentation : res.documentation.value);
+		if (d) item.documentation = { value: d };
+	}
+	return item;
 }
 
 // hover from extension language providers (registered once, when monaco is up)
@@ -603,7 +618,7 @@ async function provideCompletions(model, position) {
 	const cOwners = langProviders.get('completion:' + langId);
 	if (cOwners) for (const extId of cOwners) {
 		const items = await langRequest(extId, 'completion', langId, { uri: activeUri(langId), languageId: langId, text: model.getValue(), line: position.lineNumber - 1, character: position.column - 1 }, 3000) || [];
-		for (const it of items) { const m = mapLspCompletion(it, range); if (m.label) { suggestions.push(m); seen.add(m.label); } }
+		for (const it of items) { const m = mapLspCompletion(it, range, extId, langId); if (m.label) { suggestions.push(m); seen.add(m.label); } }
 	}
 
 	for (const kw of langKeywords(langId)) {
@@ -619,5 +634,5 @@ async function provideCompletions(model, position) {
 	return { suggestions };
 }
 
-Object.assign(Ext, { renderView, startExtHost, notifyWorkspace, provideCompletions, activateLanguage, contributedCommands: extCommands, runExtCommand });
+Object.assign(Ext, { renderView, startExtHost, notifyWorkspace, provideCompletions, resolveCompletion, activateLanguage, contributedCommands: extCommands, runExtCommand });
 $('#ext-input').addEventListener('input', () => refreshExtView());

@@ -277,6 +277,7 @@ async function ensureEditor() {
 	monaco.languages.registerCompletionItemProvider('*', {
 		triggerCharacters: ['.', ':', '/', '<', '"', "'", '@'],
 		provideCompletionItems: (model, position) => Ext.provideCompletions(model, position),
+		resolveCompletionItem: (item) => Ext.resolveCompletion(item),
 	});
 	applyEditorSettings();
 }
