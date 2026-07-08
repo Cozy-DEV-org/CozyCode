@@ -19,7 +19,7 @@ const SETTINGS_DEFS = [
 		['terminal.fontSize', 'Terminal Font Size', 'number', 13],
 	]],
 	['Formatter', [
-		['formatter.command', 'Format Command ({file} = path)', 'text', 'npx prettier --write {file}'],
+		['formatter.command', 'External format command for other languages ({file} = path), e.g. rustfmt {file}', 'text', ''],
 	]],
 	['AI (Commit Message)', [
 		['ai.provider', 'Provider', 'select', 'anthropic', ['anthropic', 'openai', 'openrouter', 'zai', 'groq', 'ollama', 'custom']],
@@ -307,6 +307,7 @@ const FMT_SUGGEST = {
 const _suggested = new Set();
 async function suggestTooling(langId) {
 	if (!langId || langId === 'plaintext' || BUILTIN_FMT.has(langId)) return;
+	if (window.Prettier && Prettier.supports(langId)) return; // built-in Prettier handles it
 	if (_suggested.has(langId)) return;
 	if (state.settings['formatter.command']) return; // user has a global formatter
 	const s = FMT_SUGGEST[langId];
@@ -391,10 +392,27 @@ async function runFileByLang(tab) {
 /* ================= formatter ================= */
 async function formatActive() { const tab = findTab(state.active); if (tab && tab.kind === 'file' && tab.path) await formatFile(tab.path, tab.model); }
 async function formatFile(path, model) {
-	// try monaco built-in formatter first (json/html/css/ts have it), then external command
+	// built-in Prettier for supported languages — formats THIS model in the webview
+	if (window.Prettier && Prettier.supports(model.getLanguageId())) {
+		try {
+			const text = await Prettier.format(model.getLanguageId(), model.getValue());
+			if (text != null && text !== model.getValue()) {
+				if (state.editor && state.editor.getModel() === model) {
+					const sel = state.editor.getSelection();
+					state.editor.executeEdits('prettier', [{ range: model.getFullModelRange(), text }]);
+					if (sel) try { state.editor.setSelection(sel); } catch { }
+				} else {
+					model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+				}
+				toast('Formatted');
+			}
+		} catch (e) { toast('Prettier: ' + (e && e.message || e)); }
+		return;
+	}
+	// other languages: Monaco providers, then the user's external formatter command
 	try { const action = state.editor.getAction('editor.action.formatDocument'); if (action && await action.isSupported()) { await action.run(); return; } } catch { }
 	const cmd = state.settings['formatter.command'];
-	if (!cmd || state.remote) return;
+	if (!cmd || state.remote) { toast('No formatter for this language'); return; }
 	try { await FS.writeFile(path, model.getValue()); await invoke('run_formatter', { command: cmd, path }); model.setValue(await FS.readFile(path)); toast('Formatted'); }
 	catch (e) { toast('Format failed: ' + e); }
 }
