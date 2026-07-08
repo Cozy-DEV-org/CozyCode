@@ -28,7 +28,7 @@ const COZY_SHIM = `(function(){
   window.cozy={
     view:{id:viewId, isHost:!viewId},
     commands:{register:function(id,fn){cmds[id]=fn;call('registerCommand',[id]);},execute:function(id){return call('executeCommand',[id,[].slice.call(arguments,1)]);}},
-    workspace:{root:function(){return call('workspaceRoot');}, listDir:function(p){return call('listDir',[p]);}},
+    workspace:{root:function(){return call('workspaceRoot');}, listDir:function(p){return call('listDir',[p]);}, refresh:function(){return call('refresh');}},
     fs:{readFile:function(p){return call('readFile',[p]);},writeFile:function(p,t){return call('writeFile',[p,t]);},
       exists:function(p){return call('exists',[p]);},dataDir:function(){return call('dataDir',[]);},extensionPath:function(){return call('extensionPath',[]);},
       download:function(url,dest){return call('download',[url,dest]);},unzip:function(zip,dest){return call('unzip',[zip,dest]);}},
@@ -179,6 +179,7 @@ async function handleCozy(method, args, info, source) {
 		case 'registerCommand': cmdOwner.set(args[0], info.extId); return true;
 		case 'executeCommand': return runExtCommand(args[0], ...(args[1] || []));
 		case 'workspaceRoot': return state.root || '';
+		case 'refresh': try { state.fileList = null; if (typeof renderTree === 'function') renderTree(); } catch { } return true;
 		case 'listDir': return invoke('list_dir', { path: args[0] }).catch(() => []);
 		case 'readFile': return invoke('read_file', { path: args[0] });
 		case 'writeFile': await invoke('write_file', { path: args[0], content: args[1] }); return true;
