@@ -14,18 +14,30 @@ const convertFileSrc = window.__TAURI__.core.convertFileSrc;
 // invoked by the host with {__cozyHost, command}.
 const COZY_SHIM = `(function(){
   var P=new URLSearchParams(location.hash.slice(1)), viewId=P.get('cozyView')||'';
-  var _id=0, waiters={}, listeners={}, cmds={};
+  var _id=0, waiters={}, listeners={}, cmds={}, langP={}, procs={};
   function call(method,args){return new Promise(function(res){var id=++_id;waiters[id]=res;parent.postMessage({__cozy:1,viewId:viewId,req:{id:id,method:method,args:args||[]}},'*');});}
+  function b2b(b){var s=atob(b),a=new Uint8Array(s.length);for(var i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a;}
   window.addEventListener('message',function(ev){var d=ev.data;if(!d||!d.__cozyHost)return;
     if(d.res){var w=waiters[d.res.id];if(w){delete waiters[d.res.id];w(d.res.value);}}
     else if(d.event){(listeners[d.event.name]||[]).forEach(function(cb){try{cb(d.event.data);}catch(e){}});}
     else if(d.command){var fn=cmds[d.command.id];Promise.resolve(fn?fn.apply(null,d.command.args||[]):undefined).then(function(v){parent.postMessage({__cozy:1,viewId:viewId,cmdResult:{token:d.command.token,value:v}},'*');});}
+    else if(d.langReq){var lf=langP[d.langReq.kind+':'+d.langReq.langId];Promise.resolve(lf?lf(d.langReq.params):null).then(function(v){parent.postMessage({__cozy:1,viewId:viewId,langResult:{token:d.langReq.token,value:v}},'*');}).catch(function(){parent.postMessage({__cozy:1,viewId:viewId,langResult:{token:d.langReq.token,value:null}},'*');});}
+    else if(d.procData){var p=procs[d.procData.id];if(p){var by=b2b(d.procData.b64);p.onData.forEach(function(cb){try{cb(by);}catch(e){}});}}
+    else if(d.procExit){var p2=procs[d.procExit.id];if(p2){p2.onExit.forEach(function(cb){try{cb();}catch(e){}});delete procs[d.procExit.id];}}
   });
   window.cozy={
     view:{id:viewId, isHost:!viewId},
     commands:{register:function(id,fn){cmds[id]=fn;call('registerCommand',[id]);},execute:function(id){return call('executeCommand',[id,[].slice.call(arguments,1)]);}},
     workspace:{root:function(){return call('workspaceRoot');}, listDir:function(p){return call('listDir',[p]);}},
-    fs:{readFile:function(p){return call('readFile',[p]);},writeFile:function(p,t){return call('writeFile',[p,t]);}},
+    fs:{readFile:function(p){return call('readFile',[p]);},writeFile:function(p,t){return call('writeFile',[p,t]);},
+      exists:function(p){return call('exists',[p]);},dataDir:function(){return call('dataDir',[]);},
+      download:function(url,dest){return call('download',[url,dest]);},unzip:function(zip,dest){return call('unzip',[zip,dest]);}},
+    process:{spawn:function(program,args,cwd){return call('procSpawn',[program,args||[],cwd||'']).then(function(id){procs[id]={onData:[],onExit:[]};
+      return {id:id,onData:function(cb){procs[id].onData.push(cb);},onExit:function(cb){procs[id].onExit.push(cb);},write:function(s){return call('procWrite',[id,s]);},kill:function(){return call('procKill',[id]);}};});}},
+    languages:{
+      registerCompletionProvider:function(langId,fn){langP['completion:'+langId]=fn;return call('registerLang',['completion',langId]);},
+      registerHoverProvider:function(langId,fn){langP['hover:'+langId]=fn;return call('registerLang',['hover',langId]);}
+    },
     window:{
       showMessage:function(t){return call('showMessage',[t,[].slice.call(arguments,1)]);},
       showInput:function(prompt,value){return call('showInput',[prompt,value]);},
@@ -48,6 +60,12 @@ const frameInfo = new Map();    // iframe.contentWindow -> {extId, viewId}
 const cmdReturns = new Map();   // token -> resolve (host -> ext command results)
 let cmdToken = 0;
 let loadedSig = '';
+// LSP / language-server support
+const procOwner = new Map();     // procId -> source window (route proc stdout/exit back)
+let procSeq = 0;
+const langProviders = new Map(); // 'completion:lua' -> Set(extId) that registered
+const langReturns = new Map();   // token -> resolve (host -> parent language results)
+let langToken = 0;
 
 /* ================= loading ================= */
 // `startExtHost` name kept: callers (explorer/settings/core) already use it. Loads or
@@ -61,9 +79,13 @@ async function startExtHost(force = false) {
 	loadedSig = sig;
 	cozyExts = enabled;
 
-	// tear down frames for extensions no longer present/enabled
+	// tear down frames for extensions no longer present/enabled (+ kill their servers)
 	const ids = new Set(enabled.map(e => e.id));
-	for (const [extId, f] of [...hostFrames]) if (!ids.has(extId)) { f.remove(); hostFrames.delete(extId); }
+	for (const [extId, f] of [...hostFrames]) if (!ids.has(extId)) {
+		f.remove(); hostFrames.delete(extId);
+		for (const [k, set] of langProviders) { set.delete(extId); if (!set.size) langProviders.delete(k); }
+		for (const [pid] of [...procOwner]) if (pid.startsWith(extId + ':')) { invoke('proc_kill', { id: pid }).catch(() => { }); procOwner.delete(pid); }
+	}
 	for (const [vid, f] of [...viewFrames]) { const m = frameInfo.get(f.contentWindow); if (m && !ids.has(m.extId)) { f.remove(); viewFrames.delete(vid); } }
 
 	// rebuild the view + command registries from manifests
@@ -92,6 +114,9 @@ async function spawnHostFrame(ext) {
 	f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads');
 	hostFrames.set(ext.id, f);
 	document.body.appendChild(f);
+	// key frameInfo by the WindowProxy NOW (stable across the upcoming navigation) —
+	// the extension's first cozy call can arrive before the iframe 'load' fires
+	frameInfo.set(f.contentWindow, { extId: ext.id, viewId: '' });
 	f.addEventListener('load', () => frameInfo.set(f.contentWindow, { extId: ext.id, viewId: '' }));
 	try { f.src = await frameSrc(ext, ''); } catch { f.remove(); hostFrames.delete(ext.id); }
 }
@@ -106,6 +131,13 @@ async function frameSrc(ext, viewId) {
 	if (/<head[^>]*>/i.test(raw)) html = raw.replace(/<head[^>]*>/i, m => m + shim);
 	else if (/<html[^>]*>/i.test(raw)) html = raw.replace(/<html[^>]*>/i, m => m + shim);
 	else html = `<!doctype html><head>${shim}</head>` + raw;
+	// The asset URL is a single percent-encoded segment, so relative resource paths
+	// (src="lsp.js", href="style.css", img, ...) can't resolve. Rewrite relative
+	// src=/href= to absolute asset URLs rooted at the extension folder.
+	html = html.replace(/\b(src|href)\s*=\s*"([^"#][^"]*)"/gi, (m, attr, val) => {
+		if (/^[a-z][a-z0-9+.-]*:/i.test(val) || val.startsWith('//') || val.startsWith('/')) return m;
+		return `${attr}="${convertFileSrc(ext.root + '\\' + val.replace(/\//g, '\\'))}"`;
+	});
 	const out = ext.root + '\\__cozy_' + (viewId ? viewId.replace(/[^\w.-]/g, '_') : 'host') + '.html';
 	await invoke('write_file', { path: out, content: html });
 	return convertFileSrc(out) + '#cozyView=' + encodeURIComponent(viewId || '');
@@ -122,6 +154,7 @@ async function mountView(view, container) {
 	f.addEventListener('load', () => frameInfo.set(f.contentWindow, { extId: view.extId, viewId: view.id }));
 	viewFrames.set(view.id, f);
 	container.appendChild(f);
+	frameInfo.set(f.contentWindow, { extId: view.extId, viewId: view.id });
 	try { f.src = await frameSrc({ root: view.root, main: view.main }, view.id); }
 	catch { container.innerHTML = '<div class="ext-tree-item" style="color:var(--fg-dim);padding:8px">Failed to load view.</div>'; }
 }
@@ -133,14 +166,15 @@ window.addEventListener('message', async ev => {
 	const info = frameInfo.get(ev.source) || { extId: '', viewId: d.viewId };
 	if (d.ready) return;
 	if (d.cmdResult) { const r = cmdReturns.get(d.cmdResult.token); if (r) { cmdReturns.delete(d.cmdResult.token); r(d.cmdResult.value); } return; }
+	if (d.langResult) { const r = langReturns.get(d.langResult.token); if (r) { langReturns.delete(d.langResult.token); r(d.langResult.value); } return; }
 	if (!d.req) return;
 	const reply = value => ev.source.postMessage({ __cozyHost: 1, res: { id: d.req.id, value } }, '*');
-	try { reply(await handleCozy(d.req.method, d.req.args || [], info)); }
+	try { reply(await handleCozy(d.req.method, d.req.args || [], info, ev.source)); }
 	catch (e) { cozyLog('ext', `${info.extId} ${d.req.method} failed: ${e}`); reply(undefined); }
 });
 
 const cmdOwner = new Map(); // commandId -> extId (whoever registered it)
-async function handleCozy(method, args, info) {
+async function handleCozy(method, args, info, source) {
 	switch (method) {
 		case 'registerCommand': cmdOwner.set(args[0], info.extId); return true;
 		case 'executeCommand': return runExtCommand(args[0], ...(args[1] || []));
@@ -151,6 +185,27 @@ async function handleCozy(method, args, info) {
 		case 'openFile': try { await openFile(args[0], { preview: false }); } catch { } return true;
 		case 'storageGet': return JSON.parse(localStorage.getItem('cozyExtStore:' + info.extId + ':' + args[0]) || 'null');
 		case 'storageSet': localStorage.setItem('cozyExtStore:' + info.extId + ':' + args[0], JSON.stringify(args[1])); return true;
+		// filesystem helpers for extensions that fetch their own runtime (LSP servers)
+		case 'exists': return invoke('ext_path_exists', { path: args[0] });
+		case 'dataDir': return invoke('ext_data_dir', { id: info.extId });
+		case 'download': {
+			bindProcEvents();
+			if (!(await confirmDialog('Allow ' + info.extId + ' to download?', args[0]))) throw new Error('download declined');
+			await invoke('ext_download', { url: args[0], dest: args[1] }); return true;
+		}
+		case 'unzip': await invoke('ext_unzip', { zip: args[0], dest: args[1] }); return true;
+		// process bridge (LSP transport): route stdout/exit back to the caller frame
+		case 'procSpawn': {
+			bindProcEvents();
+			const pid = info.extId + ':p' + (++procSeq);
+			procOwner.set(pid, source);
+			await invoke('proc_spawn', { id: pid, program: args[0], args: args[1] || [], cwd: args[2] || '' });
+			return pid;
+		}
+		case 'procWrite': await invoke('proc_write', { id: args[0], data: args[1] }); return true;
+		case 'procKill': await invoke('proc_kill', { id: args[0] }); procOwner.delete(args[0]); return true;
+		// language providers (completion/hover) -> surfaced into Monaco
+		case 'registerLang': { const k = args[0] + ':' + args[1]; if (!langProviders.has(k)) langProviders.set(k, new Set()); langProviders.get(k).add(info.extId); return true; }
 		case 'showMessage': {
 			const [text, buttons] = args;
 			if (!buttons || !buttons.length) { toast(text); return undefined; }
@@ -182,6 +237,77 @@ function broadcast(name, data) {
 	const msg = { __cozyHost: 1, event: { name, data } };
 	for (const f of hostFrames.values()) try { f.contentWindow && f.contentWindow.postMessage(msg, '*'); } catch { }
 	for (const f of viewFrames.values()) try { f.contentWindow && f.contentWindow.postMessage(msg, '*'); } catch { }
+}
+
+/* ================= LSP support (process events + language providers) ================= */
+// route a spawned server's stdout/exit (Rust `proc-*` events) to the owning ext frame
+let procEventsBound = false;
+function bindProcEvents() {
+	if (procEventsBound) return;
+	procEventsBound = true;
+	listen('proc-out', e => { const { id, b64 } = e.payload; const w = procOwner.get(id); if (w) try { w.postMessage({ __cozyHost: 1, procData: { id, b64 } }, '*'); } catch { } });
+	listen('proc-exit', e => { const { id } = e.payload; const w = procOwner.get(id); if (w) try { w.postMessage({ __cozyHost: 1, procExit: { id } }, '*'); } catch { } procOwner.delete(id); });
+	listen('proc-err', e => { if ((bindProcEvents._n = (bindProcEvents._n || 0) + 1) <= 60) cozyLog('lsp', e.payload.id + ': ' + e.payload.line); });
+}
+
+// ask an extension's language provider for a result (completion/hover) at a position
+function langRequest(extId, kind, langId, params, timeout = 3000) {
+	const frame = hostFrames.get(extId);
+	if (!frame || !frame.contentWindow) return Promise.resolve(null);
+	return new Promise(resolve => {
+		const token = ++langToken;
+		langReturns.set(token, resolve);
+		frame.contentWindow.postMessage({ __cozyHost: 1, langReq: { token, kind, langId, params } }, '*');
+		setTimeout(() => { if (langReturns.has(token)) { langReturns.delete(token); resolve(null); } }, timeout);
+	});
+}
+
+// current editor file as a path the extension can turn into a file:// URI
+function activeUri(langId) {
+	const t = state.tabs && state.tabs.find(x => x.key === state.active);
+	return t && t.path ? t.path : 'untitled:' + langId;
+}
+
+const LSP_KIND = { 1: 'Text', 2: 'Method', 3: 'Function', 4: 'Constructor', 5: 'Field', 6: 'Variable', 7: 'Class', 8: 'Interface', 9: 'Module', 10: 'Property', 11: 'Unit', 12: 'Value', 13: 'Enum', 14: 'Keyword', 15: 'Snippet', 16: 'Color', 17: 'File', 18: 'Reference', 19: 'Folder', 20: 'EnumMember', 21: 'Constant', 22: 'Struct', 23: 'Event', 24: 'Operator', 25: 'TypeParameter' };
+function mapLspCompletion(it, range) {
+	const kind = monaco.languages.CompletionItemKind[LSP_KIND[it.kind]] ?? monaco.languages.CompletionItemKind.Text;
+	let insertText = it.insertText != null ? it.insertText : (typeof it.label === 'string' ? it.label : it.label && it.label.label);
+	let r = range;
+	const te = it.textEdit;
+	if (te) {
+		insertText = te.newText;
+		const rr = te.range || te.replace || te.insert;
+		if (rr) r = { startLineNumber: rr.start.line + 1, startColumn: rr.start.character + 1, endLineNumber: rr.end.line + 1, endColumn: rr.end.character + 1 };
+	}
+	const docv = it.documentation && (typeof it.documentation === 'string' ? it.documentation : it.documentation.value);
+	return {
+		label: typeof it.label === 'string' ? it.label : (it.label && it.label.label) || '',
+		kind, insertText, range: r,
+		insertTextRules: it.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+		detail: it.detail, documentation: docv ? { value: docv } : undefined,
+		sortText: it.sortText, filterText: it.filterText,
+	};
+}
+
+// hover from extension language providers (registered once, when monaco is up)
+let hoverBound = false;
+function bindHover() {
+	if (hoverBound || typeof monaco === 'undefined') return;
+	hoverBound = true;
+	monaco.languages.registerHoverProvider('*', {
+		provideHover: async (model, position) => {
+			const langId = model.getLanguageId();
+			const hOwners = langProviders.get('hover:' + langId);
+			if (hOwners) for (const extId of hOwners) {
+				const h = await langRequest(extId, 'hover', langId, { uri: activeUri(langId), languageId: langId, text: model.getValue(), line: position.lineNumber - 1, character: position.column - 1 }, 2500);
+				if (h && h.contents) {
+					const val = Array.isArray(h.contents) ? h.contents.map(c => typeof c === 'string' ? c : c.value).join('\n\n') : (typeof h.contents === 'string' ? h.contents : h.contents.value);
+					if (val) return { contents: [{ value: val }] };
+				}
+			}
+			return null;
+		},
+	});
 }
 
 /* ================= view placement (left / right / bottom) ================= */
@@ -467,17 +593,27 @@ function documentWords(model) {
 }
 
 async function provideCompletions(model, position) {
+	bindHover();
+	const langId = model.getLanguageId();
 	const word = model.getWordUntilPosition(position);
 	const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
 	const suggestions = [], seen = new Set();
-	for (const kw of langKeywords(model.getLanguageId())) {
+
+	// extension LSP completions first (ranked above the built-in keyword/word list)
+	const cOwners = langProviders.get('completion:' + langId);
+	if (cOwners) for (const extId of cOwners) {
+		const items = await langRequest(extId, 'completion', langId, { uri: activeUri(langId), languageId: langId, text: model.getValue(), line: position.lineNumber - 1, character: position.column - 1 }, 3000) || [];
+		for (const it of items) { const m = mapLspCompletion(it, range); if (m.label) { suggestions.push(m); seen.add(m.label); } }
+	}
+
+	for (const kw of langKeywords(langId)) {
 		if (seen.has(kw)) continue;
-		suggestions.push({ label: kw, kind: monaco.languages.CompletionItemKind.Keyword, insertText: kw, range, sortText: '0' + kw });
+		suggestions.push({ label: kw, kind: monaco.languages.CompletionItemKind.Keyword, insertText: kw, range, sortText: '8' + kw });
 		seen.add(kw);
 	}
 	for (const w of documentWords(model)) {
 		if (seen.has(w) || w === word.word) continue;
-		suggestions.push({ label: w, kind: monaco.languages.CompletionItemKind.Text, insertText: w, range, sortText: '1' + w });
+		suggestions.push({ label: w, kind: monaco.languages.CompletionItemKind.Text, insertText: w, range, sortText: '9' + w });
 		if (suggestions.length > 300) break;
 	}
 	return { suggestions };

@@ -7,6 +7,7 @@ mod fs_cmds;
 mod gh_cmds;
 mod git_cmds;
 mod misc_cmds;
+mod proc_cmds;
 mod pty_cmds;
 mod search_cmds;
 mod ssh_cmds;
@@ -31,6 +32,7 @@ fn main() {
         })
         .manage(pty_cmds::PtyState::default())
         .manage(ssh_cmds::SshState::default())
+        .manage(proc_cmds::ProcState::default())
         .manage(tunnel_cmds::TunnelState::default())
         .invoke_handler(tauri::generate_handler![
             fs_cmds::list_dir,
@@ -70,6 +72,13 @@ fn main() {
             ext_cmds::ext_set_state,
             ext_cmds::ext_disabled_ids,
             ext_cmds::ext_marketplace,
+            ext_cmds::ext_data_dir,
+            ext_cmds::ext_path_exists,
+            ext_cmds::ext_download,
+            ext_cmds::ext_unzip,
+            proc_cmds::proc_spawn,
+            proc_cmds::proc_write,
+            proc_cmds::proc_kill,
             ai_cmds::ai_models,
             git_cmds::git_merge,
             git_cmds::git_remote_url,
@@ -113,6 +122,7 @@ fn main() {
                 use tauri::Manager;
                 let app = window.app_handle();
                 pty_cmds::kill_all(&app.state());
+                proc_cmds::kill_all(&app.state());
                 tunnel_cmds::kill_all(&app.state());
                 if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                     app.exit(0);

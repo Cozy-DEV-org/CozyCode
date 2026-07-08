@@ -221,6 +221,51 @@ pub async fn ext_list() -> Result<Vec<ExtInfo>, String> {
     Ok(out)
 }
 
+// ---- extension runtime filesystem helpers (used by e.g. LSP extensions to fetch
+// and unpack a language-server binary on first activation) ----
+
+// A per-extension writable dir under the portable data folder. Kept OUT of the
+// extension's own folder so re-import / uninstall doesn't wipe a 30 MB server.
+#[tauri::command]
+pub async fn ext_data_dir(id: String) -> Result<String, String> {
+    let dir = crate::util::data_dir().join("ext-data").join(sanitize(&id));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn ext_path_exists(path: String) -> bool {
+    Path::new(&path).exists()
+}
+
+// Download a URL to a local file. The frontend confirms before calling (downloads are
+// an explicit-permission action).
+#[tauri::command]
+pub async fn ext_download(url: String, dest: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("invalid url".into());
+    }
+    let u = url.replace('\'', "''");
+    let d = dest.replace('\'', "''");
+    run_ps(&format!(
+        "$ErrorActionPreference='Stop'; $p=Split-Path -Parent '{d}'; if($p){{New-Item -ItemType Directory -Force -Path $p | Out-Null}}; \
+         [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{u}' -OutFile '{d}'"
+    ))
+    .map(|_| ())
+}
+
+// Extract a .zip / .vsix into a directory (both are zip containers).
+#[tauri::command]
+pub async fn ext_unzip(zip: String, dest: String) -> Result<(), String> {
+    let z = zip.replace('\'', "''");
+    let d = dest.replace('\'', "''");
+    run_ps(&format!(
+        "$ErrorActionPreference='Stop'; $src='{z}'; if($src -notmatch '\\.zip$'){{ $tmp=\"$src.zip\"; Copy-Item -LiteralPath $src -Destination $tmp -Force; $src=$tmp }}; \
+         Expand-Archive -LiteralPath $src -DestinationPath '{d}' -Force"
+    ))
+    .map(|_| ())
+}
+
 // Workspace-hosted marketplace index: a repo can ship `.cozycode/extensions.json`
 // listing other CozyCode extensions (name/description/repo/download) so opening that
 // folder surfaces them in the Extensions view. Returns the parsed `extensions` array.
