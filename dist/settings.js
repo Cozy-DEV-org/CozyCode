@@ -212,7 +212,7 @@ function renderPalette() {
 	const q = $('#palette-input').value.toLowerCase().replace(/^>/, '').trim();
 	const list = $('#palette-list');
 	list.innerHTML = '';
-	const filtered = paletteItems.filter(i => !q || i.label.toLowerCase().includes(q) || (i.detail || '').toLowerCase().includes(q)).slice(0, 60);
+	const filtered = paletteItems.filter(i => !q || i.label.toLowerCase().includes(q) || (i.detail || '').toLowerCase().includes(q)).slice(0, (_pOpts && _pOpts.limit) || 60);
 	list._filtered = filtered;
 	if (paletteSel >= filtered.length) paletteSel = 0;
 	filtered.forEach((item, idx) => {
@@ -309,6 +309,7 @@ async function pickTheme() {
 	try { for (const ext of await invoke('ext_list')) for (const th of ext.themes || []) items.push({ label: th.label, detail: ext.id, icon: 'symbol-color', focus: () => applyExtTheme(th.path, th.ui_theme, th.label, true), run: () => applyExtTheme(th.path, th.ui_theme, th.label) }); } catch { }
 
 	showPalette(items, 'Color Theme — arrow to preview, Enter to keep, Esc to cancel', '', {
+		limit: 1000, // show every bundled theme, not the default 60-item cap
 		onFocus: (item) => { if (item && item.focus) item.focus(); },
 		onCancel: revert,
 	});
